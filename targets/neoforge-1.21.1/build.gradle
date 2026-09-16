@@ -1,0 +1,215 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.141'
+    id 'me.modmuss50.mod-publish-plugin' version '2.1.1'
+}
+
+/*
+ * Imports repository-authoritative shared properties from:
+ *
+ *   ../../gradle.properties
+ *
+ * while allowing -P / environment / target-local properties to override
+ * them.
+ */
+apply from: file(
+        '../../gradle/target-conventions/properties.gradle'
+)
+
+/*
+ * This target is an independent Gradle root, therefore the shared identity
+ * must be installed into this Gradle model explicitly.
+ *
+ * The values themselves remain authoritative in repository gradle.properties.
+ */
+group = mod_group_id
+version = mod_version
+
+base {
+    archivesName =
+            "${mod_name}-neoforge-${minecraft_version}"
+}
+
+/*
+ * Minecraft 1.21.1 / NeoForge target contract.
+ */
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'RyanHCode Maven'
+                url = 'https://maven.ryanhcode.dev/releases'
+            }
+        }
+
+        filter {
+            includeGroup 'dev.ryanhcode.sable'
+            includeGroup 'dev.ryanhcode.sable-companion'
+        }
+    }
+}
+
+/*
+ * controlTest is a separate NeoForge development mod.
+ */
+sourceSets {
+    controlTest {
+        java.srcDirs = ['src/controlTest/java']
+        resources.srcDirs = ['src/controlTest/resources']
+
+        compileClasspath += sourceSets.main.output
+        compileClasspath += sourceSets.main.compileClasspath
+
+        runtimeClasspath += output
+        runtimeClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+}
+
+/*
+ * The loader-neutral common kernel is distributed as part of the same
+ * GravityEngine mod.
+ *
+ * ModDevGradle should still see only one production source set. Augmenting
+ * main.output makes common classes available through MOD_CLASSES in dev runs
+ * while avoiding a second source set named "main".
+ */
+sourceSets.main.output.dir(
+        project(':common').layout.buildDirectory.dir('classes/java/main'),
+        builtBy: ':common:classes'
+)
+
+configurations {
+    controlTestImplementation.extendsFrom implementation
+    controlTestCompileOnly.extendsFrom compileOnly
+    controlTestRuntimeOnly.extendsFrom runtimeOnly
+    controlTestAnnotationProcessor.extendsFrom annotationProcessor
+}
+
+def enableControlTests =
+        providers.gradleProperty('controlBoundaryChecks')
+                .map { it.toBoolean() }
+                .orElse(false)
+
+neoForge {
+    version = neoforge_version
+
+    runs {
+        client {
+            client()
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            /*
+             * main.output already contains:
+             *
+             * - NeoForge target classes/resources
+             * - common classes
+             */
+            sourceSet(sourceSets.main)
+        }
+
+        if (enableControlTests.get()) {
+            "gravityengine_control_tests" {
+                sourceSet(sourceSets.controlTest)
+            }
+        }
+    }
+}
+
+dependencies {
+    /*
+     * Compile dependency and ordinary Gradle project relationship.
+     */
+    implementation project(':common')
+
+    compileOnly(
+            "dev.ryanhcode.sable:" +
+                    "sable-neoforge-${minecraft_version}:" +
+                    sable_version
+    ) {
+        transitive = false
+    }
+
+//    compileOnly "curse.maven:sable-1312371:8673825"
+//    implementation "curse.maven:create-328085:7963363"
+//    implementation "curse.maven:create-aeronautics-676721:8763471"
+}
+
+tasks.named(
+        'processResources',
+        ProcessResources
+).configure {
+
+    def replaceProperties = [
+            minecraft_version     : minecraft_version,
+            neoforge_version      : neoforge_version,
+            neoforge_version_range: neoforge_version_range,
+
+            mod_id                : mod_id,
+            mod_name              : mod_name,
+            mod_license           : mod_license,
+            mod_version           : mod_version,
+            mod_authors           : mod_authors,
+            mod_description       : mod_description
+    ]
+
+    inputs.properties replaceProperties
+
+    filesMatching(
+            'META-INF/neoforge.mods.toml'
+    ) {
+        expand(
+                replaceProperties +
+                        [project: project]
+        )
+    }
+}
+
+/*
+ * Migration/control checkpoint.
+ *
+ * This proves:
+ * - common compiles
+ * - production target compiles
+ * - controlTest compiles against production
+ * - resources process
+ * - final jar assembles
+ *
+ * It does not execute behavioural control tests.
+ */
+tasks.register('baselineSnapshot') {
+    group = 'verification'
+
+    description =
+            'Compile the imported GravityEngine baseline before refactoring.'
+
+    dependsOn tasks.named('classes')
+    dependsOn tasks.named('controlTestClasses')
+    dependsOn tasks.named('jar')
+}
+
+/*
+ * Publishing remains a shared target convention.
+ */
+apply from: file(
+        '../../gradle/target-conventions/publish.gradle'
+)
