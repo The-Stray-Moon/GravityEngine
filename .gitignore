@@ -1,7 +1,13 @@
 .gradle/
+.tmp/
 build/
 run/
 out/
 *.iml
 .idea/
-
+targets/*/logs/
+logs/
+.VSCodeCounter/
+docs/*
+!docs/API_BOUNDARY.md
+/GravityEngine_Sable_WIP_Review_and_Continuation.md
