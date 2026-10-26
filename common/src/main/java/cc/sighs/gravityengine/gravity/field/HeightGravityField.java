@@ -1,6 +1,10 @@
 package cc.sighs.gravityengine.gravity.field;
 
-import org.joml.Vector3d;
+import cc.sighs.gravityengine.api.field.GravityField;
+import cc.sighs.gravityengine.api.field.GravityFieldQuery;
+import cc.sighs.gravityengine.api.field.GravityFieldSample;
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.math.ScalarMath;
 
 /**
  * Pure absolute world-space acceleration field aligned with world -Y.
@@ -41,15 +45,16 @@ public final class HeightGravityField implements GravityField {
     public GravityFieldSample sample(GravityFieldQuery query) {
         double y = query.position().y();
         if (y <= fullGravityY) {
-            return new GravityFieldSample(new Vector3d(0.0D, -accelerationMagnitude, 0.0D));
+            return new GravityFieldSample(
+                    new Vec3d(0.0D, -accelerationMagnitude, 0.0D));
         }
         if (y >= zeroGravityY) {
             return GravityFieldSample.ZERO;
         }
         double t = (y - fullGravityY) / (zeroGravityY - fullGravityY);
-        t = Math.clamp(t, 0.0D, 1.0D);
+        t = ScalarMath.clamp(t, 0.0D, 1.0D);
         double smooth = t * t * (3.0D - 2.0D * t);
         double magnitude = accelerationMagnitude * (1.0D - smooth);
-        return new GravityFieldSample(new Vector3d(0.0D, -magnitude, 0.0D));
+        return new GravityFieldSample(new Vec3d(0.0D, -magnitude, 0.0D));
     }
 }

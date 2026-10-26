@@ -49,15 +49,6 @@ public record GravityApplicationPlan(Kind kind, GravityAccelerationMode accelera
         return kind == Kind.CHARACTER || kind == Kind.PASSIVE;
     }
 
-    /** Character yaw/pitch are interpreted in the gravity reference for gameplay. */
-    public boolean usesGravityLocalLook() {
-        return kind == Kind.CHARACTER;
-    }
-
-    public boolean usesCustomPresentation() {
-        return usesCustomBody();
-    }
-
     public boolean usesFieldAcceleration() {
         return accelerationMode == GravityAccelerationMode.FIELD;
     }

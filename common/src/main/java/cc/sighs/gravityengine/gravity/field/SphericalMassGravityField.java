@@ -1,8 +1,10 @@
 package cc.sighs.gravityengine.gravity.field;
 
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
+import cc.sighs.gravityengine.api.field.GravityField;
+import cc.sighs.gravityengine.api.field.GravityFieldQuery;
+import cc.sighs.gravityengine.api.field.GravityFieldSample;
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.math.ScalarMath;
 import java.util.Objects;
 
 /**
@@ -17,6 +19,14 @@ import java.util.Objects;
  * has acceleration proportional to radius, with finite zero acceleration at
  * the exact center.</p>
  *
+ * <p>{@code referenceDensity} is the profile's shape reference, not a
+ * pointwise material density and not necessarily the sphere's mean density.
+ * Passing {@link SphericalGravityMath#uniformDensity(double, double)} for the
+ * configured mass and surface radius selects the uniform profile. Other
+ * positive values change the interior enclosed-mass distribution while the
+ * exterior field still converges to {@code G*M/r^2} for the same total signed
+ * mass.</p>
+ *
  * <p>The evaluator only maps a query to acceleration. Activation and the
  * threshold-derived finite influence volume belong to the registered
  * instance/source descriptor.</p>
@@ -24,7 +34,7 @@ import java.util.Objects;
 public final class SphericalMassGravityField implements GravityField {
     private static final double CENTER_EPSILON_SQUARED = 1.0E-24D;
     private static final double[] SERIES_COEFFICIENTS = seriesCoefficients();
-    private final Vector3d center;
+    private final Vec3d center;
     private final double mass;
     private final double referenceDensity;
     private final double surfaceRadius;
@@ -35,7 +45,7 @@ public final class SphericalMassGravityField implements GravityField {
     private final double profileKCubed;
     private final double profileInverseNormalization;
 
-    public SphericalMassGravityField(Vector3dc center, double mass, double referenceDensity,
+    public SphericalMassGravityField(Vec3d center, double mass, double referenceDensity,
                                      double surfaceRadius, double gravityConstant) {
         Objects.requireNonNull(center, "center");
         SphericalGravityMath.requireFinite(center.x(), "center.x");
@@ -45,7 +55,7 @@ public final class SphericalMassGravityField implements GravityField {
         SphericalGravityMath.requirePositive(referenceDensity, "referenceDensity");
         SphericalGravityMath.requirePositive(surfaceRadius, "surfaceRadius");
         SphericalGravityMath.requireNonNegative(gravityConstant, "gravityConstant");
-        this.center = new Vector3d(center);
+        this.center = center;
         this.mass = mass;
         this.referenceDensity = referenceDensity;
         this.surfaceRadius = surfaceRadius;
@@ -62,7 +72,7 @@ public final class SphericalMassGravityField implements GravityField {
                 + 3.0D * Math.log(surfaceRadius)
                 + Math.log(4.0D * Math.PI / 3.0D);
         this.profileK = Math.abs(shape) < 1.0E-12D
-                ? 0.0D : Math.clamp(shape, -64.0D, 64.0D);
+                ? 0.0D : ScalarMath.clamp(shape, -64.0D, 64.0D);
         this.profileKCubed = this.profileK * this.profileK * this.profileK;
         this.profileInverseNormalization = 1.0D / profileIntegral(1.0D);
         // Reject unrepresentable field scales at construction, never in ordinary sampling.
@@ -73,24 +83,24 @@ public final class SphericalMassGravityField implements GravityField {
     public GravityFieldSample sample(GravityFieldQuery query) {
         Objects.requireNonNull(query, "query");
         if (mass == 0.0D || gravityConstant == 0.0D) return GravityFieldSample.ZERO;
-        Vector3d radial = new Vector3d(center).sub(query.position());
+        Vec3d radial = center.subtract(query.position());
         double r2 = radial.lengthSquared();
         if (r2 <= CENTER_EPSILON_SQUARED) return GravityFieldSample.ZERO;
         // Finite game positions normally take the squared-length path. Hypot avoids
         // overflow for unusually distant queries without changing world-space direction.
         double r = Double.isFinite(r2) ? Math.sqrt(r2)
-                : Math.hypot(Math.hypot(radial.x, radial.y), radial.z);
+                : Math.hypot(Math.hypot(radial.x(), radial.y()), radial.z());
         if (!Double.isFinite(r)) return GravityFieldSample.ZERO;
         double fraction = r2 >= surfaceRadiusSquared && r >= surfaceRadius ? 1.0D
                 : enclosedMassFraction(r / surfaceRadius);
         double magnitude = signedGravitationalParameter * fraction / r / r;
         // Saturate only unrepresentable acceleration; avoid 0 * infinity on axis samples.
-        magnitude = Math.clamp(magnitude, -Double.MAX_VALUE, Double.MAX_VALUE);
-        radial.div(r).mul(magnitude);
-        return new GravityFieldSample(radial);
+        magnitude = ScalarMath.clamp(magnitude, -Double.MAX_VALUE, Double.MAX_VALUE);
+        return new GravityFieldSample(
+                radial.multiply(1.0D / r).multiply(magnitude));
     }
 
-    public Vector3d center() { return new Vector3d(center); }
+    public Vec3d center() { return center; }
 
     /**
      * Normalized enclosed-mass fraction at {@code x = r / surfaceRadius}.
@@ -102,7 +112,7 @@ public final class SphericalMassGravityField implements GravityField {
         if (x <= 0.0D) return 0.0D;
         if (x >= 1.0D) return 1.0D;
         if (this.profileK == 0.0D) return x * x * x;
-        return Math.clamp(
+        return ScalarMath.clamp(
                 profileIntegral(x) * this.profileInverseNormalization,
                 0.0D,
                 1.0D

@@ -1,5 +1,8 @@
 package cc.sighs.gravityengine.gravity.field;
 
+import cc.sighs.gravityengine.api.field.GravityField;
+import cc.sighs.gravityengine.api.field.GravityFieldQuery;
+import cc.sighs.gravityengine.api.field.GravityFieldSample;
 import java.util.Objects;
 
 /**

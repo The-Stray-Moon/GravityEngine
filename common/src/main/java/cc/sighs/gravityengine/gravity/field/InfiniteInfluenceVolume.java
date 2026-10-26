@@ -1,8 +1,8 @@
 package cc.sighs.gravityengine.gravity.field;
 
-import cc.sighs.gravityengine.math.geometry.Aabb3d;
-import org.joml.Vector3dc;
-
+import cc.sighs.gravityengine.api.field.GravityFieldBounds;
+import cc.sighs.gravityengine.api.field.GravityInfluenceVolume;
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Optional;
 
 /**
@@ -18,12 +18,12 @@ public final class InfiniteInfluenceVolume
     private InfiniteInfluenceVolume() {}
 
     @Override
-    public boolean contains(Vector3dc position) {
+    public boolean contains(Vec3d position) {
         return true;
     }
 
     @Override
-    public Optional<Aabb3d> finiteBounds() {
+    public Optional<GravityFieldBounds> finiteBounds() {
         return Optional.empty();
     }
 }

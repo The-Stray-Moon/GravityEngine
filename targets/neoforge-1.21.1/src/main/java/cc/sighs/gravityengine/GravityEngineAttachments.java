@@ -2,6 +2,8 @@ package cc.sighs.gravityengine;
 
 import cc.sighs.gravityengine.attitude.persistence.BodyAttitudePersistenceSerializer;
 import cc.sighs.gravityengine.attitude.persistence.BodyAttitudePersistenceSlot;
+import cc.sighs.gravityengine.gravity.persistence.GravityPersistenceSerializer;
+import cc.sighs.gravityengine.gravity.persistence.GravityPersistenceSlot;
 import net.neoforged.neoforge.attachment.AttachmentType;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -41,6 +43,28 @@ public final class GravityEngineAttachments {
                              * - NO copyOnDeath()
                              * - NO sync(...)
                              */
+                            .build()
+            );
+
+    /**
+     * Durable gravity continuity.
+     *
+     * <p>{@code copyOnDeath()} mirrors the long-standing supported contract
+     * that gravity survives death respawn; NeoForge already copies serializable
+     * attachments on non-death player replacement (End return, dimension
+     * change). It is deliberately not synced: the durable record is not the
+     * live assignment/application wire contract.</p>
+     */
+    public static final DeferredHolder<
+            AttachmentType<?>,
+            AttachmentType<GravityPersistenceSlot>
+    > GRAVITY_PERSISTENCE =
+            ATTACHMENTS.register(
+                    "gravity_persistence",
+                    () -> AttachmentType
+                            .builder(GravityPersistenceSlot::forHolder)
+                            .serialize(GravityPersistenceSerializer.INSTANCE)
+                            .copyOnDeath()
                             .build()
             );
 
