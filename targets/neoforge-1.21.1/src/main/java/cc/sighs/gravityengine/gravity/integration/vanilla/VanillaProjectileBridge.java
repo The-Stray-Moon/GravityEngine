@@ -1,19 +1,20 @@
 package cc.sighs.gravityengine.gravity.integration.vanilla;
 
-import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CharacterCapsule;
+import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import cc.sighs.gravityengine.look.SemanticLookSnapshot;
-import java.util.Objects;
+import cc.sighs.gravityengine.math.Quatd;
 import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Quaterniond;
-import org.joml.Vector3d;
+
+import java.util.Objects;
 
 /**
  * Projectile origin, launch and ballistic-aim operand bridge.
@@ -78,7 +79,8 @@ public final class VanillaProjectileBridge {
             float pitchOffsetDegrees
     ) {
         Objects.requireNonNull(actor, "actor");
-        return actor.look().launchDirection(pitchOffsetDegrees);
+        return MinecraftMathAdapter.toMinecraft(
+                actor.look().launchDirection(pitchOffsetDegrees));
     }
 
     /**
@@ -93,19 +95,31 @@ public final class VanillaProjectileBridge {
         var look = actor.look();
         if (look.source() != SemanticLookSnapshot.Source.BODY_ATTITUDE) {
             var angles = look.requestedLocalLook();
-            return look.localDirectionToWorld(fishingLaunchLocal(
-                    angles.yawDegrees(), angles.pitchDegrees(), randomX, randomY, randomZ));
+            return MinecraftMathAdapter.toMinecraft(
+                    look.localDirectionToWorld(
+                            MinecraftMathAdapter.toVec3d(
+                                    fishingLaunchLocal(
+                                            angles.yawDegrees(),
+                                            angles.pitchDegrees(),
+                                            randomX,
+                                            randomY,
+                                            randomZ
+                                    )
+                            )
+                    ));
         }
         var carrier = actor.attachmentFrame();
-        Vec3 forward = look.forward();
-        var local = carrier.worldToLocal(new org.joml.Vector3d(forward.x, forward.y, forward.z),
-                new org.joml.Vector3d());
-        float yaw = (float) Math.toDegrees(Math.atan2(-local.x, local.z));
-        float pitch = (float) Math.toDegrees(Math.atan2(-local.y, Math.hypot(local.x, local.z)));
+        Vec3 forward = MinecraftMathAdapter.toMinecraft(look.forward());
+        Vec3d local = carrier.worldToLocal(
+                MinecraftMathAdapter.toVec3d(forward));
+        float yaw = (float) Math.toDegrees(
+                Math.atan2(-local.x(), local.z()));
+        float pitch = (float) Math.toDegrees(
+                Math.atan2(-local.y(), Math.hypot(local.x(), local.z())));
         Vec3 velocity = fishingLaunchLocal(yaw, pitch, randomX, randomY, randomZ);
-        var world = carrier.localToWorld(new org.joml.Vector3d(velocity.x, velocity.y, velocity.z),
-                new org.joml.Vector3d());
-        return new Vec3(world.x, world.y, world.z);
+        Vec3d world = carrier.localToWorld(
+                MinecraftMathAdapter.toVec3d(velocity));
+        return MinecraftMathAdapter.toMinecraft(world);
     }
 
     /**
@@ -278,10 +292,10 @@ public final class VanillaProjectileBridge {
             axis = normalized.cross(shooter.viewUp());
         }
         if (axis.lengthSqr() <= PARALLEL_EPSILON_SQUARED) {
-            Vector3d frameForward = new Vector3d();
-            shooter.referenceFrame().orientation().axisZ(frameForward);
-            axis = normalized.cross(new Vec3(
-                    frameForward.x, frameForward.y, frameForward.z));
+            Vec3d frameForward = shooter.referenceFrame()
+                    .orientation().axisZ();
+            axis = normalized.cross(
+                    MinecraftMathAdapter.toMinecraft(frameForward));
         }
         Vec3 perpendicular = rotateAround(
                 normalized, axis, Math.PI * 0.5D);
@@ -332,11 +346,13 @@ public final class VanillaProjectileBridge {
             Vec3 axis,
             double radians
     ) {
-        Vector3d out = new Vector3d(
-                vector.x, vector.y, vector.z).rotate(
-                        new Quaterniond().setAngleAxis(radians,
-                                axis.x, axis.y, axis.z).normalize());
-        return new Vec3(out.x, out.y, out.z);
+        Vec3d out = Quatd.fromAxisAngle(
+                MinecraftMathAdapter.toVec3d(axis),
+                radians
+        ).transform(
+                MinecraftMathAdapter.toVec3d(vector)
+        );
+        return MinecraftMathAdapter.toMinecraft(out);
     }
 
     private static Vec3 normalized(Vec3 value) {
@@ -361,11 +377,15 @@ public final class VanillaProjectileBridge {
         float radians =
                 yaw * ((float) Math.PI / 180.0F);
 
-        return frame.localToWorld(
-                new Vec3(
-                        -Mth.sin(radians),
-                        0.0D,
-                        Mth.cos(radians)
+        return MinecraftMathAdapter.toMinecraft(
+                frame.localToWorld(
+                        MinecraftMathAdapter.toVec3d(
+                                new Vec3(
+                                        -Mth.sin(radians),
+                                        0.0D,
+                                        Mth.cos(radians)
+                                )
+                        )
                 )
         );
     }
@@ -376,7 +396,8 @@ public final class VanillaProjectileBridge {
     ) {
         Objects.requireNonNull(frame, "frame");
         Objects.requireNonNull(delta, "delta");
-        return delta.dot(frame.up());
+        return delta.dot(
+                MinecraftMathAdapter.toMinecraft(frame.up()));
     }
 
     /**
@@ -401,10 +422,10 @@ public final class VanillaProjectileBridge {
             );
         }
 
-        Vector3d center =
+        Vec3d center =
                 exact.center();
 
-        Vector3d up =
+        Vec3d up =
                 exact.axis();
 
         double localOffset =
@@ -412,14 +433,14 @@ public final class VanillaProjectileBridge {
                         * target.getBbHeight();
 
         return new Vec3(
-                center.x,
-                center.y,
-                center.z
+                center.x(),
+                center.y(),
+                center.z()
         ).add(
                 new Vec3(
-                        up.x,
-                        up.y,
-                        up.z
+                        up.x(),
+                        up.y(),
+                        up.z()
                 ).scale(localOffset)
         );
     }
@@ -477,10 +498,10 @@ public final class VanillaProjectileBridge {
                     .add(0.0D, -amount, 0.0D);
         }
 
-        Vector3d center =
+        Vec3d center =
                 exact.center();
 
-        Vector3d axis =
+        Vec3d axis =
                 exact.axis();
 
         double offsetFromCenter =
@@ -489,14 +510,14 @@ public final class VanillaProjectileBridge {
                         - amount;
 
         return new Vec3(
-                center.x,
-                center.y,
-                center.z
+                center.x(),
+                center.y(),
+                center.z()
         ).add(
                 new Vec3(
-                        axis.x,
-                        axis.y,
-                        axis.z
+                        axis.x(),
+                        axis.y(),
+                        axis.z()
         ).scale(offsetFromCenter)
         );
     }
@@ -556,10 +577,7 @@ public final class VanillaProjectileBridge {
                 == EntityAnchorArgument.Anchor.EYES) {
             if (customBody) {
                 Vec3 center =
-                        GravityEntityGeometry.bodyCenter(
-                                mob,
-                                frame
-                        );
+                        GravityEntityGeometry.bodyCenter(mob);
                 physicalAnchor =
                         GravityEntityGeometry.eyePosition(
                                 mob,
@@ -579,9 +597,9 @@ public final class VanillaProjectileBridge {
                 anchor.apply(mob);
 
         return vanillaAnchor.add(
-                frame.worldToLocal(
-                        target.subtract(physicalAnchor)
-                )
+                MinecraftMathAdapter.toMinecraft(frame.worldToLocal(
+                        MinecraftMathAdapter.toVec3d(
+                                target.subtract(physicalAnchor))))
         );
     }
 
@@ -620,13 +638,14 @@ public final class VanillaProjectileBridge {
         Objects.requireNonNull(frame, "frame");
         Objects.requireNonNull(displacement, "displacement");
 
-        Vec3 local =
-                frame.worldToLocal(displacement);
+        Vec3d local =
+                frame.worldToLocal(
+                        MinecraftMathAdapter.toVec3d(displacement));
 
         return new Vec3(
-                local.x,
+                local.x(),
                 0.0D,
-                local.z
+                local.z()
         );
     }
 
@@ -642,9 +661,8 @@ public final class VanillaProjectileBridge {
     ) {
         Objects.requireNonNull(frame, "frame");
 
-        return frame.localToWorld(
-                new Vec3(x, y, z)
-        );
+        return MinecraftMathAdapter.toMinecraft(
+                frame.localToWorld(new Vec3d(x, y, z)));
     }
 
     /**

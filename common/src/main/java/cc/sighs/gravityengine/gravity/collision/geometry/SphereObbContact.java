@@ -1,7 +1,6 @@
 package cc.sighs.gravityengine.gravity.collision.geometry;
 
-import org.joml.Vector3d;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /**
@@ -12,8 +11,8 @@ import java.util.Objects;
  * @param penetration          penetration depth (non-negative)
  */
 public record SphereObbContact(
-        Vector3d pointOnBox,
-        Vector3d normalFromSphereToBox,
+        Vec3d pointOnBox,
+        Vec3d normalFromSphereToBox,
         double penetration
 ) {
     private static final double NORMAL_EPSILON = 1.0E-6D;
@@ -34,24 +33,10 @@ public record SphereObbContact(
                     "penetration must be finite and non-negative: "
                             + penetration);
         }
-        pointOnBox = new Vector3d(pointOnBox);
-        normalFromSphereToBox = new Vector3d(normalFromSphereToBox);
     }
 
-    @Override
-    public Vector3d pointOnBox() {
-        return new Vector3d(pointOnBox);
-    }
-
-    @Override
-    public Vector3d normalFromSphereToBox() {
-        return new Vector3d(normalFromSphereToBox);
-    }
-
-    private static void requireFinite(Vector3d vector, String name) {
-        if (!Double.isFinite(vector.x)
-                || !Double.isFinite(vector.y)
-                || !Double.isFinite(vector.z)) {
+    private static void requireFinite(Vec3d vector, String name) {
+        if (!vector.isFinite()) {
             throw new IllegalArgumentException(
                     name + " must be finite: " + vector);
         }

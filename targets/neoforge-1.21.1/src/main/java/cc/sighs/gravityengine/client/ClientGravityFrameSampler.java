@@ -1,8 +1,13 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.gravity.presentation.ClientGravityPresentationState;
+
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
+import cc.sighs.gravityengine.math.Quatd;
+import cc.sighs.gravityengine.math.geometry.BodyOrientation3d;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
@@ -21,12 +26,16 @@ public final class ClientGravityFrameSampler {
     /** Immutable quaternion components cached with a render snapshot. */
     public record CachedRotation(float x, float y, float z, float w) {
         static CachedRotation from(GravityFrame frame) {
-            Quaternionf rotation = frame.rotation();
+            Objects.requireNonNull(frame, "frame");
+
+            Quatd rotation =
+                    BodyOrientation3d.quaternion(frame.orientation());
+
             return new CachedRotation(
-                    rotation.x(),
-                    rotation.y(),
-                    rotation.z(),
-                    rotation.w()
+                    (float) rotation.x(),
+                    (float) rotation.y(),
+                    (float) rotation.z(),
+                    (float) rotation.w()
             );
         }
 
@@ -70,7 +79,8 @@ public final class ClientGravityFrameSampler {
                         "presentationHalfHeight must be finite and non-negative");
             }
             Vec3 expectedCenter = feet.add(
-                    frame.up().scale(presentationHalfHeight));
+                    MinecraftMathAdapter.toMinecraft(
+                            frame.up().multiply(presentationHalfHeight)));
             if (expectedCenter.distanceToSqr(center) > 1.0E-12D) {
                 throw new IllegalArgumentException(
                         "feet/center/frame/half-height must describe one reference-aligned character");
@@ -84,19 +94,12 @@ public final class ClientGravityFrameSampler {
     /** Samples using the entity's currently committed application state. */
     public static RenderSnapshot sample(Entity entity, float partialTick) {
         Objects.requireNonNull(entity, "entity");
-        var runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime();
+        var runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState();
         float progress = sanitizePartialTick(partialTick);
-        var completed = runtime.completedPresentationFrame();
         var state = STATES.get(entity);
-        // A discontinuity can arrive between client tick and render. Bypass old endpoints
-        // immediately, without acknowledging the watermark or advancing history in render.
-        GravityFrame frame = state == null ? (completed == null ? null : completed.frame())
-                : state.sample(runtime.lastPresentationDiscontinuityRevision(), completed, progress);
-        boolean fallback = frame == null;
-        if (fallback) {
-            // Read accepted runtime evidence; do not sample a field or use pending assignment.
-            frame = cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess.authoritativeFrame(entity);
-        }
+        boolean fallback = state == null;
+        GravityFrame frame = fallback ? presentationTarget(entity)
+                : state.sampleAt(entity.tickCount + progress);
         long tick = Math.max(0L, entity.level().getGameTime());
         return renderSnapshot(GravityEntityGeometry.interpolatedPositionAnchor(entity, progress),
                 GravityEntityGeometry.dimensions(entity).height(), frame, tick,
@@ -105,17 +108,61 @@ public final class ClientGravityFrameSampler {
 
     /** Called once after the client's entity ticks, observing only the latest operation publication. */
     static void tick(Entity entity) {
-        var runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime();
-        STATES.computeIfAbsent(entity, ignored -> new ClientGravityPresentationState()).tick(
-                entity.tickCount, runtime.presentationRevision(),
-                runtime.lastPresentationDiscontinuityRevision(), runtime.completedPresentationFrame());
+        var state = STATES.computeIfAbsent(entity, ignored -> new ClientGravityPresentationState());
+        state.tick(presentationTarget(entity), entity.tickCount);
+    }
+
+    private static GravityFrame presentationTarget(Entity entity) {
+        if (!cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy.usesCustomPresentation(entity)) {
+            return GravityFrame.DEFAULT;
+        }
+        var runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState();
+        var completed = runtime.completedPresentationFrame();
+        return completed == null
+                ? cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess.authoritativeFrame(entity)
+                : completed.frame();
+    }
+
+    private static double displayTime(Entity entity) {
+        return entity.tickCount + sanitizePartialTick(net.minecraft.client.Minecraft.getInstance()
+                .getTimer().getGameTimeDeltaPartialTick(true));
+    }
+
+    static void beforePhysicalCommit(Entity entity) {
+        // Seed the old visual authority before assignment/suppression/geometry changes.
+        STATES.computeIfAbsent(entity, ignored -> {
+            var state = new ClientGravityPresentationState();
+            // Initial history is constant, so no fractional clock is needed.
+            state.tick(presentationTarget(entity), entity.tickCount);
+            return state;
+        });
+    }
+
+    static void afterPhysicalCommit(Entity entity) {
+        // In .249 Minecraft.runTick advances Timer, drains network tasks, then
+        // ticks entities. Here entity.tickCount can still be the old integer
+        // while Timer already contains the new residual (e.g. 156.90 -> 156.06).
+        // Never rebuild a visual trajectory at that mixed time. Physical state
+        // is already installed; ClientTickEvent.Post observes the latest target.
+        STATES.get(entity).requestConvergence();
+    }
+
+    /** Keep rendering through a gravity disable transition until the world basis is reached. */
+    public static boolean usesPresentation(Entity entity) {
+        if (cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy.usesCustomPresentation(entity)) return true;
+        if (entity.isRemoved() || entity.isSpectator() || entity.isPassenger()
+                || entity instanceof net.minecraft.world.entity.LivingEntity living && living.isSleeping()) return false;
+        var state = STATES.get(entity);
+        return state != null && state.transitioning(displayTime(entity));
     }
 
     static RenderSnapshot renderSnapshot(Vec3 positionAnchor, float height, GravityFrame frame,
             long tick, long revision, boolean fallback) {
         double halfHeight = height * 0.5D;
         Vec3 center = GravityEntityGeometry.bodyCenterFromPositionAnchor(positionAnchor, height);
-        return new RenderSnapshot(center.subtract(frame.up().scale(halfHeight)), center,
+        return new RenderSnapshot(center.subtract(
+                        MinecraftMathAdapter.toMinecraft(
+                                frame.up().multiply(halfHeight))), center,
                 halfHeight, frame, tick, revision, fallback, CachedRotation.from(frame));
     }
 

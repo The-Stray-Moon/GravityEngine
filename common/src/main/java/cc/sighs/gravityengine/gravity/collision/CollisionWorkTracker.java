@@ -21,6 +21,7 @@ public final class CollisionWorkTracker {
     private long blockShapesEvaluated;
     private int blockPrimitiveCount;
     private int obstaclesProduced;
+    private int rigidCandidatesVisited;
     private int sceneQueries;
     private int dynamicSurfaceSnapshots;
     private int worldBorderSnapshots;
@@ -31,11 +32,45 @@ public final class CollisionWorkTracker {
     private int voxelReducerChecks;
     private int voxelIndexRegistrations;
 
+    private int capturedEntityPrimitives;
+
     private boolean limitExceeded;
     private String limitReason;
 
     public CollisionWorkTracker(CollisionWorkBudget budget) {
         this.budget = Objects.requireNonNull(budget, "budget");
+    }
+    
+
+    /**
+     * Capture storage/validation budget, independent of scene-query output.
+     *
+     * Native publications reserve their entire immutable primitive list
+     * before validation. External publications and pose-strict snapshots
+     * reserve one primitive at a time.
+     */
+    public boolean recordCapturedEntityPrimitives(int count) {
+        if (count < 0) {
+            throw new IllegalArgumentException("negative capture count");
+        }
+        if (this.limitExceeded) {
+            return false;
+        }
+        if (this.budget.maxObstaclePrimitives()
+                - this.capturedEntityPrimitives < count) {
+            flagLimit(
+                    "maxCapturedEntityPrimitives="
+                            + this.budget.maxObstaclePrimitives()
+            );
+            return false;
+        }
+
+        this.capturedEntityPrimitives += count;
+        return true;
+    }
+
+    public int capturedEntityPrimitives() {
+        return this.capturedEntityPrimitives;
     }
 
     /** Records one visited block position. */
@@ -109,6 +144,24 @@ public final class CollisionWorkTracker {
             return;
         }
         this.sourceSphereSnapshots++;
+    }
+
+    /**
+     * Native packet candidates, charged before filtering or publication reads.
+     * Uses maxObstaclePrimitives as a separate candidate-count ceiling.
+     */
+    public boolean recordRigidCandidate() {
+        if (this.limitExceeded) return false;
+        if (this.rigidCandidatesVisited >= this.budget.maxObstaclePrimitives()) {
+            flagLimit("maxRigidCandidates=" + this.budget.maxObstaclePrimitives());
+            return false;
+        }
+        this.rigidCandidatesVisited++;
+        return true;
+    }
+
+    public int rigidCandidatesVisited() {
+        return this.rigidCandidatesVisited;
     }
 
     public boolean recordObstacles(int count) {
@@ -225,6 +278,15 @@ public final class CollisionWorkTracker {
                 this.budget.maxNarrowPhaseTests()
                         - this.narrowPhaseTests
         );
+    }
+
+    /**
+     * Maximum accepted material-point chord count for one rotating support
+     * trajectory. The route fails closed when its required subdivision exceeds
+     * this operation budget.
+     */
+    public int maxSupportTrajectorySegments() {
+        return this.budget.maxSupportTrajectorySegments();
     }
 
     public boolean canAffordNarrowPhaseTests(int required) {

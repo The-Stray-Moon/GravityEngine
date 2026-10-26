@@ -1,9 +1,10 @@
 package cc.sighs.gravityengine.gravity.integration.vanilla;
 
-import java.util.Objects;
+import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import net.minecraft.world.phys.Vec3;
 
-import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import java.util.Objects;
 
 /**
  * Shield-facing bridge: the defender's reference-tangent facing heading and
@@ -24,13 +25,22 @@ public final class VanillaShieldBridge {
             VanillaActorSnapshot defender
     ) {
         Objects.requireNonNull(defender, "defender");
-        Vec3 up = defender.referenceUp();
-        Vec3 heading = AttitudeSpaceTransform.projectedUnit(
-                defender.zeroPitchHeading(), up, TANGENT_EPSILON);
+        var up = MinecraftMathAdapter.toVec3d(
+                defender.referenceUp()
+        );
+        var heading = AttitudeSpaceTransform.projectedUnit(
+                MinecraftMathAdapter.toVec3d(
+                        defender.zeroPitchHeading()
+                ),
+                up,
+                TANGENT_EPSILON
+        );
         if (heading == null) {
-            heading = VanillaMeleeBridge.meleeWorldDirection(defender);
+            heading = MinecraftMathAdapter.toVec3d(
+                    VanillaMeleeBridge.meleeWorldDirection(defender)
+            );
         }
-        return heading;
+        return MinecraftMathAdapter.toMinecraft(heading);
     }
 
     /**
@@ -46,7 +56,15 @@ public final class VanillaShieldBridge {
         Objects.requireNonNull(defender, "defender");
         Objects.requireNonNull(sourcePosition, "sourcePosition");
         Vec3 displacement = defender.feet().subtract(sourcePosition);
-        return AttitudeSpaceTransform.projectedUnit(
-                displacement, defender.referenceUp(), TANGENT_EPSILON);
+        var projected = AttitudeSpaceTransform.projectedUnit(
+                MinecraftMathAdapter.toVec3d(displacement),
+                MinecraftMathAdapter.toVec3d(
+                        defender.referenceUp()
+                ),
+                TANGENT_EPSILON
+        );
+        return projected == null
+                ? null
+                : MinecraftMathAdapter.toMinecraft(projected);
     }
 }

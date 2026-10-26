@@ -1,21 +1,20 @@
 package cc.sighs.gravityengine.mixin;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.attitude.BodyAttitudeInput;
 import cc.sighs.gravityengine.client.ClientBodyAttitudeControl;
 import cc.sighs.gravityengine.gravity.GravityFrame;
-import cc.sighs.gravityengine.gravity.debug.GravityDebugLog;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
+import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.movement.ClosestSpaceEscapePolicy;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
-import cc.sighs.gravityengine.gravity.runtime.GravityRuntimeState;
+import cc.sighs.gravityengine.gravity.runtime.GravityOperationState;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -24,7 +23,6 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +31,12 @@ import java.util.List;
 public abstract class LocalPlayerMixin extends net.minecraft.client.player.AbstractClientPlayer
         implements cc.sighs.gravityengine.attitude.runtime.BodyAttitudeRuntime.Input,
         cc.sighs.gravityengine.gravity.minecraft.access.CharacterControlAccess.LocalInput {
+    @com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod(method = "tick", require = 1)
+    private void gravityengine$bindPredictedBody(Operation<Void> original) {
+        try (var ignored = cc.sighs.gravityengine.client.ClientMovementBodyVersion.begin((LocalPlayer)(Object)this)) {
+            original.call();
+        }
+    }
     @Unique private final cc.sighs.gravityengine.client.CharacterSneakInput gravityengine$sneakInput =
             new cc.sighs.gravityengine.client.CharacterSneakInput();
     @org.spongepowered.asm.mixin.Shadow private boolean crouching;
@@ -89,9 +93,18 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
         var frame = GravityFrameAccess.authoritativeFrame(player);
         var look = cc.sighs.gravityengine.look.PlayerLookIntegration.capture(player, frame);
         var forward = cc.sighs.gravityengine.gravity.movement.GravityPhysics.tangentForward(
-                look.forward(), frame, look.zeroPitchForward());
-        var left = frame.up().cross(forward).normalize();
-        return original.call(new Vec3(displacement.dot(left), displacement.dot(frame.up()), displacement.dot(forward)));
+                look.forward(),
+                frame,
+                look.zeroPitchForward()
+        );
+        var left = frame.up().cross(forward).normalized();
+        Vec3d displacementValue =
+                MinecraftMathAdapter.toVec3d(displacement);
+        return original.call(new Vec3(
+                displacementValue.dot(left),
+                displacementValue.dot(frame.up()),
+                displacementValue.dot(forward)
+        ));
     }
 
     /** The adapted displacement already uses control axes; no second yaw rotation. */
@@ -177,8 +190,8 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
         }
         this.gravityengine$closestSpaceHandledTick = player.tickCount;
 
-        GravityRuntimeState runtime = GravityEntityAccess.cast(player)
-                .gravityengine$gravityComponent().runtime();
+        GravityOperationState runtime = GravityEntityAccess.cast(player)
+                .gravityengine$gravityComponent().operationState();
 
         if (runtime.isInMove()) {
             /*
@@ -189,7 +202,7 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
         }
 
         GravityFrame frame =
-                GravityFrameAccess.authoritativeFrame(player);
+                GravityFrameAccess.installedLocomotionFrame(player);
 
         if (frame == null) {
             return;
@@ -204,8 +217,14 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
          * plane rather than by pretending that the tangent basis defines a voxel
          * coordinate grid.
          */
-        Vec3 left = frame.left();
-        Vec3 forward = frame.forward();
+        Vec3 left =
+                MinecraftMathAdapter.toMinecraft(
+                        frame.left()
+                );
+        Vec3 forward =
+                MinecraftMathAdapter.toMinecraft(
+                        frame.forward()
+                );
         double widthOffset = player.getBbWidth() * 0.35D;
 
         Vec3[] samples = {
@@ -293,8 +312,12 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
         ClosestSpaceEscapePolicy.Escape escape =
                 selected.orElseThrow();
 
-        Vec3 localVelocity =
-                frame.worldToLocal(player.getDeltaMovement());
+        Vec3d localVelocity =
+                frame.worldToLocal(
+                        MinecraftMathAdapter.toVec3d(
+                                player.getDeltaMovement()
+                        )
+                );
 
         double nudge =
                 escape.sign()
@@ -305,22 +328,24 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
          * component with the small escape nudge instead of accumulating a force.
          * The normal component and the orthogonal tangent component are retained.
          */
-        Vec3 newLocalVelocity =
+        Vec3d newLocalVelocity =
                 escape.axis()
                         == ClosestSpaceEscapePolicy.LocalAxis.X
-                        ? new Vec3(
+                        ? new Vec3d(
                         nudge,
-                        localVelocity.y,
-                        localVelocity.z
+                        localVelocity.y(),
+                        localVelocity.z()
                 )
-                        : new Vec3(
-                        localVelocity.x,
-                        localVelocity.y,
+                        : new Vec3d(
+                        localVelocity.x(),
+                        localVelocity.y(),
                         nudge
                 );
 
         player.setDeltaMovement(
-                frame.localToWorld(newLocalVelocity)
+                MinecraftMathAdapter.toMinecraft(
+                        frame.localToWorld(newLocalVelocity)
+                )
         );
     }
 
@@ -501,12 +526,6 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
         return level.collidesWithSuffocatingBlock(player, column);
     }
 
-    @Inject(method = "aiStep", at = @At("HEAD"))
-    private void gravityengine$defensiveReconcile(CallbackInfo ci) {
-        LocalPlayer player = (LocalPlayer) (Object) this;
-        cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator.updateLocalAbilitySuppression(player);
-    }
-
     /**
      * Semantic input capture boundary.
      *
@@ -533,69 +552,6 @@ public abstract class LocalPlayerMixin extends net.minecraft.client.player.Abstr
     private void gravityengine$captureSemanticInput(CallbackInfo ci) {
         LocalPlayer player = (LocalPlayer) (Object) this;
         ClientBodyAttitudeControl.beginTick(player);
-    }
-
-    @Inject(method = "sendPosition", at = @At("HEAD"))
-    private void gravityengine$logOutgoingMove(CallbackInfo ci) {
-        LocalPlayer player = (LocalPlayer) (Object) this;
-        if (!GravityDebugLog.ENABLED) return;
-        GravityDebugLog.log(
-                player,
-                "client-move-out",
-                "position=%s %s yaw=%.3f pitch=%.3f onGround=%s",
-                GravityDebugLog.vec(player.position()),
-                GravityDebugLog.formatEntityVelocity(player),
-                player.getYRot(),
-                player.getXRot(),
-                player.onGround()
-        );
-    }
-
-    @WrapOperation(
-            method = {"sendPosition", "tick"},
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/multiplayer/ClientPacketListener;send(Lnet/minecraft/network/protocol/Packet;)V"
-            )
-    )
-    private void gravityengine$traceActualMovePacket(
-            ClientPacketListener connection,
-            Packet<?> packet,
-            Operation<Void> original
-    ) {
-        LocalPlayer player = (LocalPlayer) (Object) this;
-        // 1.21.1 sendPosition chooses Pos/PosRot/Rot/StatusOnly; tick also
-        // sends passenger rotation. Observe immediately before the real send.
-        if (GravityDebugLog.ENABLED
-                && packet instanceof ServerboundMovePlayerPacket move
-                && GravityInfluencePolicy.usesCustomCollision(player)) {
-            var packetPosition = new net.minecraft.world.phys.Vec3(
-                    move.getX(player.getX()),
-                    move.getY(player.getY()),
-                    move.getZ(player.getZ())
-            );
-            GravityDebugLog.log(
-                    player,
-                    "client-packet-send",
-                    "packetType=%s carriesPosition=%s carriesRotation=%s packetPosition=%s "
-                            + "currentPosition=%s packetYaw=%.3f packetPitch=%.3f "
-                            + "currentLocalYaw=%.3f currentLocalPitch=%.3f "
-                            + "packetOnGround=%s currentOnGround=%s %s",
-                    packet.getClass().getSimpleName(),
-                    move.hasPosition(),
-                    move.hasRotation(),
-                    GravityDebugLog.vec(packetPosition),
-                    GravityDebugLog.vec(player.position()),
-                    move.getYRot(player.getYRot()),
-                    move.getXRot(player.getXRot()),
-                    player.getYRot(),
-                    player.getXRot(),
-                    move.isOnGround(),
-                    player.onGround(),
-                    GravityDebugLog.formatEntityVelocity(player)
-            );
-        }
-        original.call(connection, packet);
     }
 
     @Inject(method = "tick", at = @At("RETURN"))

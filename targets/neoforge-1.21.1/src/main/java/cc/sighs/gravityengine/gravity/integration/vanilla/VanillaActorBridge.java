@@ -3,6 +3,7 @@ package cc.sighs.gravityengine.gravity.integration.vanilla;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import cc.sighs.gravityengine.look.PlayerLookIntegration;
 import cc.sighs.gravityengine.look.SemanticLookSnapshot;
@@ -16,8 +17,8 @@ import java.util.Objects;
  * Captures the one coherent gameplay actor sample required by a Vanilla
  * gameplay-spatial bridge.
  *
- * <p>Every capture reads the reference frame at most once and derives body
- * geometry and semantic look from that exact frame.  A caller that already
+ * <p>Every capture reads the reference frame at most once for semantic look;
+ * physical attachments separately consume the installed collision axis. A caller that already
  * owns a {@code GravityFrame} must use the explicit-frame overload; the
  * one-argument convenience resolves the authoritative frame once only when
  * the caller genuinely has no operation frame.</p>
@@ -82,9 +83,10 @@ public final class VanillaActorBridge {
         Vec3 center;
         Vec3 eye;
         if (customBody) {
-            attachmentFrame = frame.orientation();
-            center = GravityEntityGeometry.bodyCenter(entity, frame);
-            eye = GravityEntityGeometry.eyePosition(entity, center, frame);
+            var installed = GravityFrame.completedOnUpAxis(GravityEntityGeometry.installedUp(entity), frame);
+            attachmentFrame = installed.orientation();
+            center = GravityEntityGeometry.bodyCenter(entity);
+            eye = GravityEntityGeometry.eyePosition(entity, center, installed);
         } else {
             attachmentFrame = OrthonormalFrame3d.IDENTITY;
             center = entity.getBoundingBox().getCenter();
@@ -95,7 +97,10 @@ public final class VanillaActorBridge {
                 attachmentFrame,
                 look,
                 GravityEntityGeometry.gravityFeetFromBodyCenter(center,
-                        GravityEntityGeometry.dimensions(entity).height(), frame.down()),
+                        GravityEntityGeometry.dimensions(entity).height(),
+                        MinecraftMathAdapter.toMinecraft(
+                                attachmentFrame.axisY().negate()
+                        )),
                 center,
                 eye,
                 entity.getBbWidth(),
@@ -122,12 +127,6 @@ public final class VanillaActorBridge {
             return null;
         }
 
-        GravityFrame frame =
-                GravityFrameAccess.authoritativeFrame(entity);
-
-        return GravityEntityGeometry.exactBody(
-                entity,
-                frame
-        );
+        return GravityEntityGeometry.exactBody(entity);
     }
 }

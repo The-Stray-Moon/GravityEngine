@@ -1,13 +1,28 @@
 package cc.sighs.gravityengine.gravity.collision;
 
 /**
- * Dedicated fail-closed result when a solver query leaves its captured
- * operation domain. The exception is an invariant violation: a legal route
- * segment must always be inside the conservative envelope captured before
- * solving. Solver code never expands the domain lazily.
+ * Refuses a query for which collision coverage cannot be proved. Leaving the
+ * captured domain or losing the query subject indicates an integration error;
+ * unsupported geometry is an expected capability boundary. Both preserve the
+ * last proven position. Solver code never expands the domain lazily.
  */
-public final class CollisionSceneCoverageException extends RuntimeException {
-    public CollisionSceneCoverageException(String message) {
-        super(message);
+public final class CollisionSceneCoverageException
+        extends RuntimeException {
+
+    private static final long serialVersionUID = 1L;
+    public enum Reason { CAPTURE_DOMAIN, UNAVAILABLE_BLOCK_DATA, UNSUPPORTED_GEOMETRY, MISSING_SUBJECT }
+    private final Reason reason;
+
+    public CollisionSceneCoverageException(
+            String message
+    ) {
+        this(Reason.CAPTURE_DOMAIN, message);
     }
+
+    public CollisionSceneCoverageException(Reason reason, String message) {
+        super(message);
+        this.reason = java.util.Objects.requireNonNull(reason);
+    }
+
+    public Reason reason() { return reason; }
 }

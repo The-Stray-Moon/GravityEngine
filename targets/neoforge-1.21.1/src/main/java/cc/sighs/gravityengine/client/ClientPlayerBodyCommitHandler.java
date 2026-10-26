@@ -1,186 +1,173 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.debug.GravityDebugLog;
+import cc.sighs.gravityengine.gravity.geometry.BodyRepresentation;
+import cc.sighs.gravityengine.gravity.integration.geometry.BodyCommitTransaction;
 import cc.sighs.gravityengine.gravity.integration.geometry.GravityApplicationBarrier;
-import cc.sighs.gravityengine.gravity.integration.geometry.NativeAabbApplicationCommit;
+import cc.sighs.gravityengine.gravity.integration.geometry.InstalledBodySnapshot;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.model.GravityEntityState.RemoteApplicationAcceptance;
 import cc.sighs.gravityengine.network.ClientboundPlayerBodyCommitPayload;
+import cc.sighs.gravityengine.network.ClientboundPlayerBodyCommitPayload.CommitMode;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.Vec3;
 
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.UUID;
 import java.util.WeakHashMap;
 
-/** Runs on the payload registrar's MAIN thread. No client pose-fit/recovery search. */
+/** MAIN-thread admission and installation of complete body transactions.
+ * No application/representation retry queue; native pairing owns entity lifetime.
+ * Accepted snapshots below are transport fingerprints, never live physical state. */
 public final class ClientPlayerBodyCommitHandler {
-    private static final int MAX_PENDING = 256;
-    private static final long MAX_AGE_TICKS = 600L;
-    private record Key(ResourceLocation dimension, UUID uuid) {}
-    private record Pending(ClientboundPlayerBodyCommitPayload payload, long receivedTick) {}
-    private static final Map<Key, Pending> PENDING = new LinkedHashMap<>();
-    private static final Map<Player, Long> APPLIED_EPOCH = new WeakHashMap<>();
-    private static long tick;
-    private static final Map<Player, Long> LAST_RESYNC_REQUEST = new WeakHashMap<>();
+    private static final Map<Player, ClientboundPlayerBodyCommitPayload> ACCEPTED = new WeakHashMap<>();
 
     private ClientPlayerBodyCommitHandler() {}
 
     public static void handle(ClientboundPlayerBodyCommitPayload payload) {
         Minecraft mc = Minecraft.getInstance();
         if (!mc.isSameThread()) throw new IllegalStateException("body commit requires the client thread");
-        var assignment = payload.assignment();
-        if (payload.nativeApplicationOnly()) {
-            applyNativeApplication(payload);
-            return;
-        }
-        if (payload.correction() != null) {
-            Player player = mc.player;
-            if (mc.level == null || player == null || mc.getConnection() == null
-                    || !mc.level.dimension().location().equals(assignment.dimensionId())
-                    || player.getId() != assignment.entityId()
-                    || !player.getUUID().equals(assignment.entityUuid())) {
-                // Never retain a self teleport for another world/incarnation and never ack
-                // a body that could not be installed. This is a protocol/order violation.
-                throw new IllegalStateException("self body commit does not match the current player/world");
-            }
-            try (var ignored = GravityApplicationBarrier.hold(player)) {
+        var identity = payload.assignment();
+        if (mc.level == null || mc.getConnection() == null
+                || !mc.level.dimension().location().equals(identity.dimensionId())) return;
+        Entity entity = mc.level.getEntity(identity.entityId());
+        if (!(entity instanceof Player player) || player.isRemoved()
+                || !player.getUUID().equals(identity.entityUuid())) return;
+        if ((payload.mode() == CommitMode.OBSERVER) == (player == mc.player)) return;
+
+        try (var barrier = GravityApplicationBarrier.hold(player)) {
+            if (!admit(player, payload)) return;
+            var predictedVelocity = player.getDeltaMovement();
+            ClientGravityFrameSampler.beforePhysicalCommit(player);
+            try (var transaction = BodyCommitTransaction.begin(player)) {
                 install(player, payload);
-                // Exactly one native handler call. Vanilla writes position/history/rotation,
-                // emits its own teleport ACK and emits its normal PosRot confirmation.
-                // The authoritative body is already installed before either packet is sent.
-                mc.getConnection().handleMovePlayer(payload.correction());
-                LAST_RESYNC_REQUEST.remove(player);
+                if (payload.correction() != null) {
+                    // The original native position/history update and ACK follow the
+                    // complete physical install, under the same handoff barrier.
+                    mc.getConnection().handleMovePlayer(payload.correction());
+                    if (payload.mode() == CommitMode.RELOCATION) player.setDeltaMovement(predictedVelocity);
+                }
+                // Native position invalidation runs first. Publish the complete
+                // received frame after the final body and anchor are installed.
+                var runtime = GravityEntityAccess.cast(player).gravityengine$gravityComponent().operationState();
+                var reference = payload.gravityReferenceFrame();
+                if (reference == null) runtime.clearFrameContinuity();
+                else runtime.acceptFrameEndpoint(reference, player.level().getGameTime());
             }
-            GravityDebugLog.log(player, "body-handoff-applied",
-                    "epoch=%s teleportId=%s custom=%s position=%s",
-                    payload.applicationEpoch(), payload.correction().getId(),
-                    payload.application().plan().usesCustomBody(), GravityDebugLog.vec(player.position()));
-            return;
+            ClientGravityFrameSampler.afterPhysicalCommit(player);
+            ACCEPTED.put(player, payload);
+        } catch (RuntimeException failure) {
+            // Callback/ABI failures cannot be recovered by continuing with a partial body.
+            // Stop the connection rather than silently acknowledging a failed transaction.
+            mc.getConnection().getConnection().disconnect(
+                    Component.literal("GravityEngine body transaction failed: " + failure.getMessage()));
+            throw failure;
         }
-        if (!applyObserver(payload)) {
-            var key = new Key(assignment.dimensionId(), assignment.entityUuid());
-            var previous = PENDING.get(key);
-            if (previous == null || payload.applicationEpoch() >= previous.payload().applicationEpoch()) {
-                PENDING.put(key, new Pending(payload, tick));
-            }
-            while (PENDING.size() > MAX_PENDING) PENDING.remove(PENDING.keySet().iterator().next());
-        }
+        if (GravityDebugLog.shouldLog(player)) GravityDebugLog.log(player, "body-commit-applied",
+                "mode=%s epoch=%s representation=%s plan=%s position=%s velocity=%s",
+                payload.mode(), payload.applicationEpoch(), payload.representation(),
+                payload.application().plan().kind(), GravityDebugLog.vec(player.position()),
+                GravityDebugLog.vec(player.getDeltaMovement()));
     }
 
-    private static void applyNativeApplication(ClientboundPlayerBodyCommitPayload payload) {
-        var mc = Minecraft.getInstance();
-        Player player = mc.player;
-        var a = payload.assignment();
-        if (mc.level == null || player == null || mc.getConnection() == null
-                || !mc.level.dimension().location().equals(a.dimensionId())
-                || player.getId() != a.entityId() || !player.getUUID().equals(a.entityUuid())) {
-            // Never queue a self application for a different world/incarnation.
-            return;
+    private static boolean admit(Player player, ClientboundPlayerBodyCommitPayload payload) {
+        var state = GravityEntityAccess.cast(player).gravityengine$gravityComponent().state();
+        var acceptance = state.classifyRemoteApplication(payload.application(), payload.applicationEpoch());
+        if (acceptance == RemoteApplicationAcceptance.CONFLICT) {
+            throw new IllegalStateException("conflicting application at epoch " + payload.applicationEpoch());
         }
-        long appliedEpoch = APPLIED_EPOCH.getOrDefault(player, -1L);
-        if (payload.applicationEpoch() <= appliedEpoch) return;
-        if (cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy.collisionRoute(player)
-                != cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy.CollisionRoute.VANILLA) {
-            // Prediction may have entered an exact frame since the server snapshot.
-            // Do not locally convert a capsule or discard authority indefinitely.
-            long last = LAST_RESYNC_REQUEST.getOrDefault(player, Long.MIN_VALUE);
-            if (last == Long.MIN_VALUE || tick - last >= 20) {
-                LAST_RESYNC_REQUEST.put(player, tick);
-                net.neoforged.neoforge.network.PacketDistributor.sendToServer(
-                        cc.sighs.gravityengine.network.ServerboundPlayerBodyResyncPayload.INSTANCE);
+        if (payload.applicationEpoch() < state.applicationEpoch()) return false;
+        var previous = ACCEPTED.get(player);
+        if (previous == null) return true;
+        if (payload.applicationEpoch() < previous.applicationEpoch()) return false;
+        if (payload.applicationEpoch() == previous.applicationEpoch()) {
+            if (!samePhysicalFacts(previous, payload)) {
+                throw new IllegalStateException("conflicting body/reference at epoch " + payload.applicationEpoch());
             }
-            return;
-        }
-        // Pose in a metadata-only snapshot is not an instruction. Keep a
-        // client-predicted crouch/swim pose and its current native dimensions.
-        try (var ignored = GravityApplicationBarrier.hold(player)) {
-            ClientGravitySyncService.applySnapshot(player, a);
-            NativeAabbApplicationCommit.installCommitted(
-                    player, payload.application(), payload.installedFrame());
-            GravityEntityAccess.cast(player).gravityengine$gravityComponent().takePending();
-            APPLIED_EPOCH.put(player, payload.applicationEpoch());
-        }
-        // No refreshDimensions, position/history/rotation write, velocity reset or ACK.
-        GravityDebugLog.log(player, "native-application-applied",
-                "epoch=%s plan=%s position=%s velocity=%s",
-                payload.applicationEpoch(), payload.application().plan().kind(),
-                GravityDebugLog.vec(player.position()), GravityDebugLog.vec(player.getDeltaMovement()));
-    }
-
-    private static boolean applyObserver(ClientboundPlayerBodyCommitPayload payload) {
-        var mc = Minecraft.getInstance();
-        var a = payload.assignment();
-        if (mc.level == null || !mc.level.dimension().location().equals(a.dimensionId())) return false;
-        Entity entity = mc.level.getEntity(a.entityId());
-        if (entity == null) return false;
-        if (!(entity instanceof Player player) || !player.getUUID().equals(a.entityUuid())) return true;
-        // Observer data must NEVER install a local-player body without its matching teleport.
-        if (player == mc.player) return true;
-        if (payload.applicationEpoch() < APPLIED_EPOCH.getOrDefault(player, -1L)) return true;
-        try (var ignored = GravityApplicationBarrier.hold(player)) {
-            install(player, payload);
+            // Same physical tuple may carry new assignment/evidence, or a native correction.
+            if (payload.correction() == null
+                    && payload.assignment().assignmentSyncRevision() <= previous.assignment().assignmentSyncRevision()
+                    && payload.assignment().influenceRevision() <= previous.assignment().influenceRevision()) return false;
         }
         return true;
     }
 
+    private static boolean samePhysicalFacts(ClientboundPlayerBodyCommitPayload a,
+            ClientboundPlayerBodyCommitPayload b) {
+        return a.application().equals(b.application()) && a.representation() == b.representation()
+                && a.pose() == b.pose() && a.installedWidth() == b.installedWidth()
+                && a.installedHeight() == b.installedHeight()
+                && sameAxis(a.installedUp(), b.installedUp())
+                && sameReference(a.gravityReferenceFrame(), b.gravityReferenceFrame());
+    }
+
+    private static boolean sameAxis(cc.sighs.gravityengine.api.math.Vec3d a, cc.sighs.gravityengine.api.math.Vec3d b) {
+        return a == b || a != null && b != null && a.distanceSquared(b) <= 1.0E-20;
+    }
+
+    private static boolean sameReference(GravityFrame a, GravityFrame b) {
+        return a == b || a != null && b != null && a.orientation().equals(b.orientation())
+                && a.strength() == b.strength();
+    }
+
     private static void install(Player player, ClientboundPlayerBodyCommitPayload payload) {
         var component = GravityEntityAccess.cast(player).gravityengine$gravityComponent();
-        var runtime = component.runtime();
-        if (runtime.isInMove()) throw new IllegalStateException("body commit during a live movement");
-        // Desired assignment/suppression is separate from the committed application below.
+        var runtime = component.operationState();
+        if (runtime.isInMove() || runtime.isApplyingGeometry()) {
+            throw new IllegalStateException("body transaction during a physical operation");
+        }
+        var installed = InstalledBodySnapshot.capture(player);
+        var installedUp = payload.installedUp();
+        boolean changed = installed.representationFactsDifferFrom(payload.representation(), payload.pose(),
+                payload.installedWidth(), payload.installedHeight(), installedUp);
+        boolean dimensionsChanged = installed.pose() != payload.pose()
+                || Math.abs(installed.width() - payload.installedWidth()) > 1.0E-6
+                || Math.abs(installed.height() - payload.installedHeight()) > 1.0E-6;
+        if (!dimensionsChanged) GravityEntityAccess.cast(player).gravityengine$discardDimensionProposal();
+        var anchor = player.position();
+        // Support/legality and any anchor adjustment were decided by the
+        // server transaction. The replica never solves a different body here.
+        // Protocol mode does not classify displacement. Same-body corrections
+        // leave support available to EntityPositionIntegration's native write
+        // classifier (unchanged / soft revalidation / hard discontinuity).
+        if (changed) runtime.clearMovementTransientState();
+        if (changed) {
+            try (var geometry = runtime.openGeometryMutation()) {
+                if (dimensionsChanged) {
+                    // setPose synchronously invokes refreshDimensions in .249.
+                    // A separately received native pose may already match while
+                    // its dimension installation was deferred.
+                    if (player.getPose() == payload.pose()) player.refreshDimensions();
+                    else player.setPose(payload.pose());
+                    var dimensions = GravityEntityGeometry.dimensions(player);
+                    if (Math.abs(dimensions.width() - payload.installedWidth()) > 1.0E-6
+                            || Math.abs(dimensions.height() - payload.installedHeight()) > 1.0E-6) {
+                        throw new IllegalStateException("remote dimensions disagree with platform Size result");
+                    }
+                }
+                if (payload.representation() == BodyRepresentation.EXACT_BODY) {
+                    GravityEntityGeometry.installFromPositionAnchor(player, installedUp, anchor);
+                } else {
+                    GravityEntityGeometry.commitVanillaBody(player, anchor,
+                            GravityEntityGeometry.dimensions(player).makeBoundingBox(anchor));
+                    if (installedUp != null) runtime.setInstalledCollisionAxis(installedUp);
+                }
+                player.fallDistance = 0;
+                player.setOnGround(false);
+            }
+        }
         ClientGravitySyncService.applySnapshot(player, payload.assignment());
-        Vec3 anchor = player.position();
-        runtime.clearInfluenceTransientState();
-        try (var ignored = runtime.openGeometryMutation()) {
-            player.setPose(payload.pose());
-            // A same-pose snapshot may arrive after another authoritative size update.
-            player.refreshDimensions();
-            component.commitApplication(payload.application());
-            if (payload.installedFrame() != null) {
-                GravityEntityGeometry.installFromPositionAnchor(player, payload.installedFrame(), anchor);
-            } else {
-                GravityEntityGeometry.commitVanillaBody(player, anchor,
-                        GravityEntityGeometry.dimensions(player).makeBoundingBox(anchor));
-            }
-            player.fallDistance = 0.0F;
-            player.setOnGround(false);
-        }
-        component.takePending();
-        APPLIED_EPOCH.put(player, payload.applicationEpoch());
+        component.state().acceptRemoteApplication(payload.application(), payload.applicationEpoch());
+        component.state().takePending();
     }
 
-    public static void retryOnTick() {
-        tick++;
-        Iterator<Pending> iterator = PENDING.values().iterator();
-        while (iterator.hasNext()) {
-            Pending pending = iterator.next();
-            if (tick - pending.receivedTick() > MAX_AGE_TICKS || applyObserver(pending.payload())) {
-                iterator.remove();
-            }
-        }
-    }
-
-    public static void onEntityJoin(Entity entity) {
-        Pending pending = PENDING.remove(new Key(entity.level().dimension().location(), entity.getUUID()));
-        if (pending != null) handle(pending.payload());
-    }
-    public static void onEntityRemoved(Entity entity) {
-        PENDING.remove(new Key(entity.level().dimension().location(), entity.getUUID()));
-        if (entity instanceof Player player) {
-            APPLIED_EPOCH.remove(player);
-            LAST_RESYNC_REQUEST.remove(player);
-        }
-    }
+    public static void onEntityRemoved(Entity entity) { ACCEPTED.remove(entity); }
     public static void clearDimension(ResourceLocation dimension) {
-        PENDING.keySet().removeIf(key -> key.dimension().equals(dimension));
-        APPLIED_EPOCH.keySet().removeIf(player -> player.level().dimension().location().equals(dimension));
-        LAST_RESYNC_REQUEST.keySet().removeIf(player -> player.level().dimension().location().equals(dimension));
+        ACCEPTED.keySet().removeIf(player -> player.level().dimension().location().equals(dimension));
     }
-    public static void clearAll() { PENDING.clear(); APPLIED_EPOCH.clear(); LAST_RESYNC_REQUEST.clear(); tick = 0L; }
+    public static void clearAll() { ACCEPTED.clear(); }
 }

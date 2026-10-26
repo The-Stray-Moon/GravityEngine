@@ -1,22 +1,20 @@
 package cc.sighs.gravityengine.gravity.kinematic.geometry;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.math.geometry.Aabb3d;
 import cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d;
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
 import java.util.Objects;
 
 /**
  * A segment Minkowski-summed with a sphere. Yaw is deliberately absent.
  *
- * <p>Neutral kernel geometry: all coordinates are JOML vectors and the
- * enclosing bounds are {@link Aabb3d}.  Minecraft conversion happens in the
- * adapter layer.</p>
+ * <p>Neutral kernel geometry: all coordinates are GravityEngine {@link Vec3d}
+ * values and the enclosing bounds are {@link Aabb3d}. Minecraft conversion
+ * happens in the adapter layer.</p>
  */
 public record CharacterCapsule(
-        Vector3d center,
-        Vector3d axis,
+        Vec3d center,
+        Vec3d axis,
         double radius,
         double halfSegmentLength
 ) implements CollisionBody {
@@ -39,22 +37,27 @@ public record CharacterCapsule(
         if (!Double.isFinite(axisLengthSquared) || axisLengthSquared <= AXIS_LENGTH_EPSILON) {
             throw new IllegalArgumentException("axis must be non-zero: " + axis);
         }
-        center = new Vector3d(center);
-        axis = new Vector3d(axis);
-        if (Math.abs(axis.lengthSquared() - 1) > 4 * Math.ulp(1.0)) axis.normalize();
+        if (Math.abs(axis.lengthSquared() - 1.0D) > 4 * Math.ulp(1.0D)) {
+            axis = axis.normalized();
+        }
     }
 
     public static CharacterCapsule fromDimensions(
-            Vector3dc center,
+            Vec3d center,
             double width,
             double height,
             OrthonormalFrame3d frame
     ) {
         Objects.requireNonNull(frame, "frame");
-        return fromDimensions(center, width, height, frame.axisY(new Vector3d()));
+        return fromDimensions(center, width, height, frame.axisY());
     }
 
-    public static CharacterCapsule fromDimensions(Vector3dc center, double width, double height, Vector3dc up) {
+    public static CharacterCapsule fromDimensions(
+            Vec3d center,
+            double width,
+            double height,
+            Vec3d up
+    ) {
         if (!Double.isFinite(width) || !Double.isFinite(height)
                 || width < 0.0D || height < 0.0D) {
             throw new IllegalArgumentException(
@@ -71,61 +74,50 @@ public record CharacterCapsule(
         double radius = width * 0.5D;
         double halfSegmentLength = Math.max(0.0D, height * 0.5D - radius);
         return new CharacterCapsule(
-                new Vector3d(center),
-                new Vector3d(up),
+                center,
+                up,
                 radius,
                 halfSegmentLength);
     }
 
-    /** Fresh defensive center copy. */
-    @Override
-    public Vector3d center() {
-        return new Vector3d(center);
+    public Vec3d a() {
+        return center.subtract(
+                axis.x() * halfSegmentLength,
+                axis.y() * halfSegmentLength,
+                axis.z() * halfSegmentLength);
     }
 
-    /** Fresh defensive normalized axis copy. */
-    public Vector3d axis() {
-        return new Vector3d(axis);
-    }
-
-    public Vector3d a() {
-        return new Vector3d(center).sub(
-                axis.x * halfSegmentLength,
-                axis.y * halfSegmentLength,
-                axis.z * halfSegmentLength);
-    }
-
-    public Vector3d b() {
-        return new Vector3d(center).add(
-                axis.x * halfSegmentLength,
-                axis.y * halfSegmentLength,
-                axis.z * halfSegmentLength);
+    public Vec3d b() {
+        return center.add(
+                axis.x() * halfSegmentLength,
+                axis.y() * halfSegmentLength,
+                axis.z() * halfSegmentLength);
     }
 
     @Override
-    public CharacterCapsule move(Vector3dc displacement) {
+    public CharacterCapsule move(Vec3d displacement) {
         Objects.requireNonNull(displacement, "displacement");
         return new CharacterCapsule(
-                new Vector3d(center).add(displacement), axis, radius, halfSegmentLength
+                center.add(displacement), axis, radius, halfSegmentLength
         );
     }
 
-    public CharacterCapsule withCenter(Vector3dc newCenter) {
+    public CharacterCapsule withCenter(Vec3d newCenter) {
         return new CharacterCapsule(
-                new Vector3d(newCenter), axis, radius, halfSegmentLength);
+                newCenter, axis, radius, halfSegmentLength);
     }
 
     @Override
     public Aabb3d enclosingAabb() {
-        Vector3d first = a();
-        Vector3d second = b();
+        Vec3d first = a();
+        Vec3d second = b();
         return new Aabb3d(
-                Math.min(first.x, second.x) - radius,
-                Math.min(first.y, second.y) - radius,
-                Math.min(first.z, second.z) - radius,
-                Math.max(first.x, second.x) + radius,
-                Math.max(first.y, second.y) + radius,
-                Math.max(first.z, second.z) + radius
+                Math.min(first.x(), second.x()) - radius,
+                Math.min(first.y(), second.y()) - radius,
+                Math.min(first.z(), second.z()) - radius,
+                Math.max(first.x(), second.x()) + radius,
+                Math.max(first.y(), second.y()) + radius,
+                Math.max(first.z(), second.z()) + radius
         );
     }
 
@@ -139,10 +131,12 @@ public record CharacterCapsule(
         return new CharacterCapsule(center, axis, radius + amount, halfSegmentLength);
     }
 
-    public Vector3d bottomPoint() { return center().fma(-halfSegmentLength - radius, axis); }
+    public Vec3d bottomPoint() {
+        return center().fma(-halfSegmentLength - radius, axis);
+    }
 
     /** Also valid for non-unit query directions. */
-    public double projectionRadius(Vector3dc direction) {
+    public double projectionRadius(Vec3d direction) {
         return radius * direction.length() + halfSegmentLength * Math.abs(direction.dot(axis));
     }
 
@@ -154,12 +148,13 @@ public record CharacterCapsule(
 
     /** Analytic segment/solid interval: union of the axial barrel and endpoint balls.
      * The union is convex; its nonempty intervals join without gaps. */
-    public double[] segmentInterval(Vector3dc start, Vector3dc end) {
-        Vector3d p = new Vector3d(start).sub(center), d = new Vector3d(end).sub(start);
+    public double[] segmentInterval(Vec3d start, Vec3d end) {
+        Vec3d p = start.subtract(center);
+        Vec3d d = end.subtract(start);
         double z = p.dot(axis), dz = d.dot(axis);
         double[] result = null;
         for (double h : new double[]{-halfSegmentLength, halfSegmentLength}) {
-            Vector3d q = new Vector3d(p).fma(-h, axis);
+            Vec3d q = p.fma(-h, axis);
             result = union(result, quadraticInterval(d.lengthSquared(), q.dot(d), q.lengthSquared()-radius*radius, 0, 1));
         }
         double lo = 0, hi = 1;
@@ -169,7 +164,8 @@ public record CharacterCapsule(
             double t0 = (-halfSegmentLength-z)/dz, t1 = (halfSegmentLength-z)/dz;
             lo = Math.max(lo, Math.min(t0,t1)); hi = Math.min(hi, Math.max(t0,t1));
         }
-        p.fma(-z,axis); d.fma(-dz,axis);
+        p = p.fma(-z, axis);
+        d = d.fma(-dz, axis);
         return union(result, quadraticInterval(d.lengthSquared(), p.dot(d), p.lengthSquared()-radius*radius, lo, hi));
     }
     private static double[] quadraticInterval(double a, double b, double c, double lo, double hi) {
@@ -190,10 +186,8 @@ public record CharacterCapsule(
         return new double[]{Math.min(a[0],b[0]),Math.max(a[1],b[1])};
     }
 
-    private static void requireFinite(Vector3d vector, String name) {
-        if (!Double.isFinite(vector.x)
-                || !Double.isFinite(vector.y)
-                || !Double.isFinite(vector.z)) {
+    private static void requireFinite(Vec3d vector, String name) {
+        if (!vector.isFinite()) {
             throw new IllegalArgumentException(name + " must be finite: " + vector);
         }
     }

@@ -1,14 +1,9 @@
 package cc.sighs.gravityengine.gravity.integration.collision;
 
-import cc.sighs.gravityengine.gravity.GravityFrame;
-import cc.sighs.gravityengine.gravity.collision.CollisionComplexityLimitException;
-import cc.sighs.gravityengine.gravity.collision.CollisionObstacle;
-import cc.sighs.gravityengine.gravity.collision.CollisionScene;
-import cc.sighs.gravityengine.gravity.collision.CollisionSceneCoverageException;
+import cc.sighs.gravityengine.gravity.collision.*;
+import cc.sighs.gravityengine.gravity.kinematic.geometry.CharacterDimensionPolicy;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CollisionBody;
-import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
-import cc.sighs.gravityengine.gravity.minecraft.geometry.CharacterDimensionPolicy;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityDimensions;
 import net.minecraft.world.entity.Pose;
@@ -19,7 +14,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Strict gravity-relative pose-fit query used by
+ * Installed-pose retention and strict gravity-relative pose-change query used by
  * {@code Player.canPlayerFitWithinBlocksAndEntitiesWhen}.
  *
  * <p>Vanilla pose changes may not push the player into blocks, world border or
@@ -43,10 +38,17 @@ public final class GravityPlayerPoseFitQuery {
     public static boolean canFit(Player player, Pose pose) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(pose, "pose");
+        EntityDimensions requested = player.getDimensions(pose);
+        EntityDimensions installed = GravityEntityGeometry.dimensions(player);
+        // Retention changes no geometry. Movement owns existing overlap, even
+        // immediately after an authoritative body install at the local anchor.
+        // Do not turn that overlap into Vanilla's forced crouch/swim fallback.
+        if (pose == cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(player).gravityengine$installedPose()
+                && requested.width() == installed.width()
+                && requested.height() == installed.height()) return true;
         return canFit(
                 player,
-                player.getDimensions(pose),
-                GravityFrameAccess.authoritativeFrame(player),
+                requested,
                 player.position()
         );
     }
@@ -54,12 +56,10 @@ public final class GravityPlayerPoseFitQuery {
     public static boolean canFit(
             Entity entity,
             EntityDimensions dimensions,
-            GravityFrame frame,
             Vec3 positionAnchor
     ) {
         Objects.requireNonNull(entity, "entity");
         Objects.requireNonNull(dimensions, "dimensions");
-        Objects.requireNonNull(frame, "frame");
         Objects.requireNonNull(positionAnchor, "positionAnchor");
 
         if (CharacterDimensionPolicy.decide(
@@ -69,9 +69,7 @@ public final class GravityPlayerPoseFitQuery {
             // The same pose-fit margin erodes the capsule radius and preserves
             // its spine; this temporary query never changes installed dimensions.
             CollisionBody body = locallyDeflated(
-                    GravityEntityGeometry.candidateBody(
-                            entity, dimensions, positionAnchor, frame
-                    ),
+                    GravityEntityGeometry.candidateBody(dimensions, positionAnchor, GravityEntityGeometry.installedUp(entity)),
                     POSE_FIT_EPSILON
             );
             return canFitInScene(entity, body);
@@ -101,7 +99,7 @@ public final class GravityPlayerPoseFitQuery {
         List<CollisionObstacle> obstacles = scene.queryPoseFit(body);
         // Touching contacts are legal; meaningful penetration (> 1e-7)
         // blocks the pose change.
-        return !GravityCollisionEngine.requiresPenetrationRecovery(
+        return !CurrentContactQuery.requiresPenetrationRecovery(
                 body, obstacles
         );
     }

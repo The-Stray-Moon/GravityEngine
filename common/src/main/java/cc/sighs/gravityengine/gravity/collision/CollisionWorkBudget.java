@@ -27,10 +27,13 @@ public record CollisionWorkBudget(
         int maxCollectedContacts,
         int maxRecoveryPasses,
         int maxVoxelReducerChecks,
-        int maxVoxelIndexRegistrations
+        int maxVoxelIndexRegistrations,
+        int maxSupportTrajectorySegments
 ) {
     private static final int DEFAULT_VOXEL_REDUCER_CHECKS = 1_000_000;
     private static final int DEFAULT_VOXEL_INDEX_REGISTRATIONS = 262_144;
+    public static final int
+            DEFAULT_MAX_SUPPORT_TRAJECTORY_SEGMENTS = 64;
 
     public CollisionWorkBudget {
         if (maxBlockPositions <= 0
@@ -39,7 +42,8 @@ public record CollisionWorkBudget(
                 || maxCollectedContacts <= 0
                 || maxRecoveryPasses <= 0
                 || maxVoxelReducerChecks <= 0
-                || maxVoxelIndexRegistrations <= 0) {
+                || maxVoxelIndexRegistrations <= 0
+                || maxSupportTrajectorySegments <= 0) {
             throw new IllegalArgumentException(
                     "collision work budget bounds must be positive"
             );
@@ -63,7 +67,32 @@ public record CollisionWorkBudget(
                 maxCollectedContacts,
                 maxRecoveryPasses,
                 DEFAULT_VOXEL_REDUCER_CHECKS,
-                DEFAULT_VOXEL_INDEX_REGISTRATIONS
+                DEFAULT_VOXEL_INDEX_REGISTRATIONS,
+                DEFAULT_MAX_SUPPORT_TRAJECTORY_SEGMENTS
+        );
+    }
+
+    /**
+     * Convenience constructor preserving the pre-trajectory budget shape.
+     */
+    public CollisionWorkBudget(
+            long maxBlockPositions,
+            int maxObstaclePrimitives,
+            int maxNarrowPhaseTests,
+            int maxCollectedContacts,
+            int maxRecoveryPasses,
+            int maxVoxelReducerChecks,
+            int maxVoxelIndexRegistrations
+    ) {
+        this(
+                maxBlockPositions,
+                maxObstaclePrimitives,
+                maxNarrowPhaseTests,
+                maxCollectedContacts,
+                maxRecoveryPasses,
+                maxVoxelReducerChecks,
+                maxVoxelIndexRegistrations,
+                DEFAULT_MAX_SUPPORT_TRAJECTORY_SEGMENTS
         );
     }
 
@@ -79,7 +108,8 @@ public record CollisionWorkBudget(
                 2_048,
                 8,
                 DEFAULT_VOXEL_REDUCER_CHECKS,
-                DEFAULT_VOXEL_INDEX_REGISTRATIONS
+                DEFAULT_VOXEL_INDEX_REGISTRATIONS,
+                DEFAULT_MAX_SUPPORT_TRAJECTORY_SEGMENTS
         );
     }
 }

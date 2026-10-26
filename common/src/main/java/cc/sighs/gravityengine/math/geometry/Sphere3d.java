@@ -1,8 +1,6 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /**
@@ -13,14 +11,12 @@ import java.util.Objects;
  * Minecraft type may appear here.</p>
  */
 public final class Sphere3d {
-    private final Vector3d center;
+    private final Vec3d center;
     private final double radius;
 
-    public Sphere3d(Vector3dc center, double radius) {
+    public Sphere3d(Vec3d center, double radius) {
         Objects.requireNonNull(center, "center");
-        if (!Double.isFinite(center.x())
-                || !Double.isFinite(center.y())
-                || !Double.isFinite(center.z())) {
+        if (!center.isFinite()) {
             throw new IllegalArgumentException(
                     "center must be finite: " + center);
         }
@@ -28,13 +24,12 @@ public final class Sphere3d {
             throw new IllegalArgumentException(
                     "radius must be finite and non-negative: " + radius);
         }
-        this.center = new Vector3d(center);
+        this.center = center;
         this.radius = radius;
     }
 
-    /** Defensive world-space center copy. */
-    public Vector3d center() {
-        return new Vector3d(center);
+    public Vec3d center() {
+        return center;
     }
 
     public double radius() {
@@ -42,14 +37,10 @@ public final class Sphere3d {
     }
 
     /** Immutable copy translated by a world-space displacement. */
-    public Sphere3d moved(Vector3dc displacement) {
+    public Sphere3d moved(Vec3d displacement) {
         Objects.requireNonNull(displacement, "displacement");
         return new Sphere3d(
-                new Vector3d(center).add(displacement), radius);
-    }
-
-    public Vector3d center(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(center);
+                center.add(displacement), radius);
     }
 
     @Override

@@ -1,6 +1,9 @@
 package cc.sighs.gravityengine.mixin;
 
-import cc.sighs.gravityengine.gravity.integration.vanilla.*;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorBridge;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorSnapshot;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.AimOperands;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
@@ -15,9 +18,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.AimOperands;
-import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
-
 
 /** 21.1.249 Snow golem: target eye minus 1.1F (unclamped); X/Z source is golem feet, Y source is snowball. No velocity lead. Vanilla computes XZ distance * (double)0.2F and owns speed/inaccuracy. */
 @Mixin(SnowGolem.class)

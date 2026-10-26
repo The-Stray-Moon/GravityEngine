@@ -1,18 +1,18 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
-import cc.sighs.gravityengine.gravity.collision.MinecraftGeometryAdapter;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CollisionBody;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.OrientedBox;
 import cc.sighs.gravityengine.gravity.look.GravityLocalLook;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import com.mojang.blaze3d.vertex.PoseStack;
-import net.minecraft.client.Camera;
-import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityDimensions;
 import net.minecraft.world.entity.LivingEntity;
@@ -27,9 +27,9 @@ import java.util.Objects;
 /**
  * Client-only integration boundary for gravity presentation consumers.
  *
- * <p>Camera, model rendering, picking and debug rendering enter through this
- * facade so each consumer receives geometry derived from the same immutable
- * render snapshot for an entity and render time.  When body attitude owns
+ * <p>Camera, model rendering and debug rendering consume the same visual
+ * timeline. Picking consumes the current semantic look and physical eye;
+ * camera convergence never delays gameplay aim. When body attitude owns
  * presentation the camera consumes semantic control independently of the model's
  * accepted Qbody; when only gravity presentation is active
  * the look stays {@code GravityFrame * gravity-local yaw/pitch}.</p>
@@ -89,7 +89,7 @@ public final class GravityPresentationIntegration {
                 gravitySnapshot, attitude, visualEyeHeight);
     }
 
-    /** Shared pure eye derivation used by Camera and both GameRenderer rays. */
+    /** Pure visual eye derivation used by Camera. */
     static Vec3 presentationEyePosition(
             ClientGravityFrameSampler.RenderSnapshot gravitySnapshot,
             @Nullable BodyAttitudeRenderSnapshot attitude,
@@ -139,7 +139,7 @@ public final class GravityPresentationIntegration {
                                 eventPitch);
                 AttitudeSpaceTransform.LocalLookAngles local =
                         cameraLook.finalLocalLook();
-                if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "camera-attitude-resolve",
+                if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "camera-attitude-resolve",
                         "partialTick=%s eventYaw=%s eventPitch=%s eventRoll=%s qDisplay=%s playerLook=%s cameraLook=%s",
                         partialTick, eventYaw, eventPitch, roll, attitude.worldFromBody(), playerLook, cameraLook);
                 return GravityCameraOrientationInstaller.computeAttitude(
@@ -151,7 +151,7 @@ public final class GravityPresentationIntegration {
             }
         }
         var gravity = snapshot(entity, partialTick);
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(entity, "camera-gravity-resolve",
+        if (PlayerViewDebugLog.shouldLog(entity)) PlayerViewDebugLog.event(entity, "camera-gravity-resolve",
                 "partialTick=%s eventYaw=%s eventPitch=%s eventRoll=%s gravity=%s",
                 partialTick, eventYaw, eventPitch, roll, gravity);
         return GravityCameraOrientationInstaller.compute(
@@ -241,7 +241,7 @@ public final class GravityPresentationIntegration {
         Objects.requireNonNull(gravitySnapshot, "gravitySnapshot");
         Objects.requireNonNull(entity, "entity");
         Objects.requireNonNull(poseStack, "poseStack");
-        boolean customAnchor = GravityInfluencePolicy.usesCustomPresentation(entity);
+        boolean customAnchor = ClientGravityFrameSampler.usesPresentation(entity);
         if (attitude != null) {
             Vec3 attitudeFeet = GravityRenderTransforms.attitudePresentationFeet(
                     gravitySnapshot, attitude);
@@ -289,54 +289,21 @@ public final class GravityPresentationIntegration {
     /** Supplies the entity-ray direction used by GameRenderer picking. */
     public static Vec3 viewVector(Entity entity, float partialTick) {
         Objects.requireNonNull(entity, "entity");
-        if (entity instanceof Player player) {
-            BodyAttitudeRenderSnapshot attitude =
-                    BodyRenderPoseResolver.snapshot(player, partialTick);
-            if (attitude != null) {
-                return BodyAttitudeRenderLookResolver.resolve(attitude).worldLook();
-            }
-        }
-        if (!GravityInfluencePolicy.usesCustomPresentation(entity)) {
+        if (!cc.sighs.gravityengine.look.PlayerLookIntegration.usesGravityEngineLook(entity)) {
             return entity.getViewVector(partialTick);
         }
-        return viewVector(entity, snapshot(entity, partialTick), partialTick);
+        return MinecraftMathAdapter.toMinecraft(
+                cc.sighs.gravityengine.look.PlayerLookIntegration.capture(
+                        entity, GravityFrameAccess.authoritativeFrame(entity)).forward());
     }
 
-    /** Supplies the common ray origin used by both block and entity picking. */
     public static Vec3 pickingEyePosition(Entity entity, float partialTick) {
-        Objects.requireNonNull(entity, "entity");
-        return pickingEyePosition(
-                entity, partialTick, entity.getEyePosition(partialTick));
+        return pickingEyePosition(entity, partialTick, entity.getEyePosition(partialTick));
     }
 
-    /**
-     * Supplies the common ray origin while preserving the eye position the
-     * Vanilla call site produced.
-     *
-     * <p>Another mod may own its own transform of the same
-     * {@code Entity.getEyePosition} call (Sable rewrites it for SubLevels).
-     * GravityEngine wraps that call instead of consuming it, so an entity without
-     * GravityEngine picking presentation keeps the underlying value.</p>
-     */
-    public static Vec3 pickingEyePosition(
-            Entity entity,
-            float partialTick,
-            Vec3 underlyingEyePosition
-    ) {
+    public static Vec3 pickingEyePosition(Entity entity, float partialTick, Vec3 underlyingEyePosition) {
         Objects.requireNonNull(entity, "entity");
-        Objects.requireNonNull(underlyingEyePosition, "underlyingEyePosition");
-        if (!usesPickingPresentation(entity)) {
-            return underlyingEyePosition;
-        }
-        ClientGravityFrameSampler.RenderSnapshot gravity =
-                snapshot(entity, partialTick);
-        BodyAttitudeRenderSnapshot attitude = attitudeSnapshot(
-                entity, partialTick);
-        return presentationEyePosition(
-                gravity,
-                attitude,
-                pickingVisualEyeHeight(entity, partialTick)
-        );
+        return Objects.requireNonNull(underlyingEyePosition, "underlyingEyePosition");
     }
 
     @Nullable
@@ -357,10 +324,8 @@ public final class GravityPresentationIntegration {
     public static CollisionBody physicalCollisionBody(Entity entity) {
         Objects.requireNonNull(entity, "entity");
         if (!GravityInfluencePolicy.usesCustomCollision(entity)) return null;
-        // The collision/reference frame owns this exact body; actor attitude belongs only
-        // to the separately sampled presentation body.
-        GravityFrame frame = GravityFrameAccess.authoritativeFrame(entity);
-        return GravityEntityGeometry.body(entity, frame);
+        // Physical geometry reads its installed axis; presentation attitude cannot select it.
+        return GravityEntityGeometry.body(entity);
     }
 
     static Vec3 eyePosition(
@@ -377,11 +342,13 @@ public final class GravityPresentationIntegration {
             float viewXRot
     ) {
         Objects.requireNonNull(snapshot, "snapshot");
-        return GravityLocalLook.toWorld(
+        return MinecraftMathAdapter.toMinecraft(
+                GravityLocalLook.toWorld(
                 snapshot.frame(),
                 viewYRot,
                 viewXRot
-        ).forward();
+                ).forward()
+        );
     }
 
     static CollisionBody body(
@@ -390,23 +357,12 @@ public final class GravityPresentationIntegration {
     ) {
         Objects.requireNonNull(snapshot, "snapshot");
         return OrientedBox.fromDimensions(
-                MinecraftGeometryAdapter.toJoml(
-                        snapshot.center(), new org.joml.Vector3d()),
+                MinecraftMathAdapter.toVec3d(
+                        snapshot.center()
+                ),
                 dimensions.width(),
                 dimensions.height(),
                 snapshot.frame().orientation()
-        );
-    }
-
-    private static Vec3 viewVector(
-            Entity entity,
-            ClientGravityFrameSampler.RenderSnapshot snapshot,
-            float partialTick
-    ) {
-        return viewVector(
-                snapshot,
-                entity.getViewYRot(partialTick),
-                entity.getViewXRot(partialTick)
         );
     }
 
@@ -418,13 +374,11 @@ public final class GravityPresentationIntegration {
                 && BodyRenderPoseResolver.hasAttitudePresentation(player)) {
             return true;
         }
-        return GravityInfluencePolicy.usesCustomPresentation(entity);
+        return ClientGravityFrameSampler.usesPresentation(entity);
     }
 
     private static boolean usesPickingPresentation(Entity entity) {
-        return entity instanceof Player player
-                && BodyRenderPoseResolver.hasAttitudePresentation(player)
-                || GravityInfluencePolicy.usesCustomPresentation(entity);
+        return cc.sighs.gravityengine.look.PlayerLookIntegration.usesGravityEngineLook(entity);
     }
 
     @Nullable
@@ -437,29 +391,13 @@ public final class GravityPresentationIntegration {
                 : null;
     }
 
-    /**
-     * GameRenderer has no eye-height argument, so read the same Camera-owned
-     * smoothing state used by Camera.setup when this entity owns that camera.
-     */
-    private static double pickingVisualEyeHeight(
-            Entity entity,
-            float partialTick
-    ) {
-        Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
-        if (camera.getEntity() == entity
-                && camera instanceof CameraEyeHeightAccess access) {
-            return access.gravityengine$visualEyeHeight(partialTick);
-        }
-        return entity.getEyeHeight();
-    }
-
     /** Which system currently owns the entity's final global presentation. */
     public static PresentationAuthority presentationAuthority(Entity entity) {
         if (entity instanceof Player player
                 && BodyRenderPoseResolver.hasAttitudePresentation(player)) {
             return PresentationAuthority.BODY_ATTITUDE;
         }
-        if (GravityInfluencePolicy.usesCustomPresentation(entity)) {
+        if (ClientGravityFrameSampler.usesPresentation(entity)) {
             return PresentationAuthority.GRAVITY_FRAME;
         }
         return PresentationAuthority.VANILLA;

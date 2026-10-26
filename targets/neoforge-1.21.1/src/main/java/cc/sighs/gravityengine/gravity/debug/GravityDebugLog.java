@@ -1,23 +1,32 @@
 package cc.sighs.gravityengine.gravity.debug;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.collision.GravityMoveResult;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
+import cc.sighs.gravityengine.math.Quatd;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Vector3dc;
 
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 public final class GravityDebugLog {
-    public static final boolean ENABLED = Boolean.getBoolean("gravityengine.debugGravity");
-    /** Explicit opt-in: paired movement observations and diagnostic transport. */
-    public static final boolean MOVEMENT_ENABLED = Boolean.getBoolean("gravityengine.debugMovement");
-    /** Body-state and geometry-application diagnostics independent of the broad gravity trace. */
-    public static final boolean SPATIAL_STATE_ENABLED = Boolean.parseBoolean(
-            System.getProperty("gravityengine.debugSpatialState", Boolean.toString(ENABLED))) || MOVEMENT_ENABLED;
-    private static final double VELOCITY_TRACE_THRESHOLD = velocityTraceThreshold();
+    private static final DebugTraceLevel GRAVITY = BootDebugOptions.gravityLevel();
+    private static final DebugTraceLevel MOVEMENT = BootDebugOptions.movementLevel();
+    private static final boolean SPATIAL = BootDebugOptions.spatialStateEnabled();
+    private static final double VELOCITY_TRACE_THRESHOLD = BootDebugOptions.gravityVelocityThreshold();
+
+    public static boolean shouldLog(Entity entity) {
+        return GRAVITY.enabled() && DebugFilter.matches(entity);
+    }
+    public static boolean shouldLogMovement(Entity entity) {
+        return MOVEMENT.enabled() && DebugFilter.matches(entity);
+    }
+    public static boolean shouldLogSpatialState(Entity entity) {
+        return SPATIAL && DebugFilter.matches(entity);
+    }
     private static final double VERTICAL_EPSILON = 1.0E-7D;
     private static final AtomicLong TRACE_SEQUENCE = new AtomicLong();
     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
@@ -25,19 +34,25 @@ public final class GravityDebugLog {
     private GravityDebugLog() {}
 
     public static void movement(Entity player, String family, String event, String fields, Object... args) {
-        if (!MOVEMENT_ENABLED) return;
+        if (!shouldLogMovement(player)) return;
         try {
-            LOGGER.info("[SMR-MOVE-{}] event={} uuid={} {} {}", family, event, player.getUUID(), tick(player),
-                    String.format(Locale.ROOT, fields, args));
+            String detail = String.format(Locale.ROOT, fields, args);
+            if (event.equals("collision-kernel") || event.equals("move-input")) {
+                DebugLogPolicy.trace(LOGGER, "[SMR-MOVE-{}] event={} uuid={} {} {}",
+                        family, event, player.getUUID(), tick(player), detail);
+            } else {
+                DebugLogPolicy.summary(LOGGER, "[SMR-MOVE-{}] event={} uuid={} {} {}",
+                        family, event, player.getUUID(), tick(player), detail);
+            }
         } catch (RuntimeException loggingFailure) {
             LOGGER.debug("Movement diagnostic formatting failed", loggingFailure);
         }
     }
 
     public static void spatialState(Entity player, String family, String event, String fields, Object... args) {
-        if (!SPATIAL_STATE_ENABLED) return;
+        if (!shouldLogSpatialState(player)) return;
         try {
-            LOGGER.info("[SMR-{}-SPATIAL-STATE] event={} player={} uuid={} {} {}",
+            DebugLogPolicy.summary(LOGGER, "[SMR-{}-SPATIAL-STATE] event={} player={} uuid={} {} {}",
                     family, event, entityLabel(player), player.getUUID(), tick(player),
                     String.format(Locale.ROOT, fields, args));
         } catch (RuntimeException loggingFailure) {
@@ -51,40 +66,49 @@ public final class GravityDebugLog {
         return value == null ? "unavailable" : "(" + value.x + "," + value.y + "," + value.z + ")";
     }
 
-    public static String quaternion(org.joml.Quaterniondc value) {
+    /** Full round-trip precision for GravityEngine-owned values. */
+    public static String exactVec(Vec3d value) {
+        return value == null
+                ? "unavailable"
+                : "(" + value.x() + "," + value.y() + "," + value.z() + ")";
+    }
+
+    public static String quaternion(Quatd value) {
         return value == null ? "unavailable"
                 : "(" + value.x() + "," + value.y() + "," + value.z() + "," + value.w() + ")";
     }
 
     public static void log(Entity entity, String event, String message, Object... args) {
-        if (!ENABLED) return;
+        if (!shouldLog(entity)) return;
         try {
-            LOGGER.info(
-                    "[GravityEngine/GravityDebug] seq={} side={} entity={} {} event={} {}",
-                    TRACE_SEQUENCE.incrementAndGet(),
-                    side(entity),
-                    entityLabel(entity),
-                    tick(entity),
-                    event,
-                    String.format(Locale.ROOT, message, args)
-            );
+            String pattern = "[GravityEngine/GravityDebug] seq={} side={} entity={} {} event={} {}";
+            Object[] values = {TRACE_SEQUENCE.incrementAndGet(), side(entity), entityLabel(entity), tick(entity),
+                    event, String.format(Locale.ROOT, message, args)};
+            switch (event) {
+                case "body-transition", "body-transition-publish", "body-transition-relocate",
+                        "body-commit-applied", "body-commit-deferred" ->
+                        LOGGER.info(pattern, values);
+                case "client-move-out", "client-packet-send", "geometry-frame", "move-resolved", "velocity-response-fallback" ->
+                        DebugLogPolicy.summary(LOGGER, pattern, values);
+                default -> DebugLogPolicy.trace(LOGGER, pattern, values);
+            }
         } catch (RuntimeException loggingFailure) {
             // Debug instrumentation must never interfere with movement.
-            LOGGER.warn("[GravityEngine/GravityDebug] gravity debug log formatting failed", loggingFailure);
+            LOGGER.debug("[GravityEngine/GravityDebug] gravity debug log formatting failed", loggingFailure);
         }
     }
 
     public static void log(String event, String message, Object... args) {
-        if (!ENABLED) return;
+        if (!shouldLog(null)) return;
         try {
-            LOGGER.info(
+            DebugLogPolicy.trace(LOGGER,
                     "[GravityEngine/GravityDebug] seq={} event={} {}",
                     TRACE_SEQUENCE.incrementAndGet(),
                     event,
                     String.format(Locale.ROOT, message, args)
             );
         } catch (RuntimeException loggingFailure) {
-            LOGGER.warn("[GravityEngine/GravityDebug] gravity debug log formatting failed", loggingFailure);
+            LOGGER.debug("[GravityEngine/GravityDebug] gravity debug log formatting failed", loggingFailure);
         }
     }
 
@@ -106,13 +130,18 @@ public final class GravityDebugLog {
         return String.format(Locale.ROOT, "(%.5f,%.5f,%.5f)", vec.x, vec.y, vec.z);
     }
 
-    /** Neutral-vector formatting overload (physics-side helper only). */
-    public static String vec(Vector3dc vec) {
-        if (vec == null) return "null";
+    /** Neutral-vector formatting overload for GravityEngine-owned values. */
+    public static String vec(Vec3d vec) {
+        if (vec == null) {
+            return "null";
+        }
         return String.format(
                 Locale.ROOT,
                 "(%.5f,%.5f,%.5f)",
-                vec.x(), vec.y(), vec.z());
+                vec.x(),
+                vec.y(),
+                vec.z()
+        );
     }
 
     public static String box(net.minecraft.world.phys.AABB box) {
@@ -158,7 +187,8 @@ public final class GravityDebugLog {
             return "frameAvailable=false velocityWorld=" + vec(velocity);
         }
         return "frameAvailable=true velocityWorld=" + vec(velocity)
-                + " velocityLocal=" + vec(frame.worldToLocal(velocity));
+                + " velocityLocal=" + vec(frame.worldToLocal(
+                        MinecraftMathAdapter.toVec3d(velocity)));
     }
 
     public static boolean isNotableVerticalChange(
@@ -166,10 +196,12 @@ public final class GravityDebugLog {
             Vec3 beforeWorld,
             Vec3 afterWorld
     ) {
-        Vec3 beforeLocal = frame.worldToLocal(beforeWorld);
-        Vec3 afterLocal = frame.worldToLocal(afterWorld);
-        double beforeY = beforeLocal.y;
-        double afterY = afterLocal.y;
+        Vec3d beforeLocal = frame.worldToLocal(
+                MinecraftMathAdapter.toVec3d(beforeWorld));
+        Vec3d afterLocal = frame.worldToLocal(
+                MinecraftMathAdapter.toVec3d(afterWorld));
+        double beforeY = beforeLocal.y();
+        double afterY = afterLocal.y();
         return Math.abs(afterY - beforeY) >= VELOCITY_TRACE_THRESHOLD
                 || Math.abs(afterY) >= VELOCITY_TRACE_THRESHOLD
                 || (beforeY <= -VELOCITY_TRACE_THRESHOLD
@@ -179,22 +211,22 @@ public final class GravityDebugLog {
     }
 
     public static String verticalChangeFlags(
-            Vec3 beforeLocal,
-            Vec3 afterLocal
+            Vec3d beforeLocal,
+            Vec3d afterLocal
     ) {
-        boolean alert = Math.abs(afterLocal.y - beforeLocal.y)
+        boolean alert = Math.abs(afterLocal.y() - beforeLocal.y())
                 >= VELOCITY_TRACE_THRESHOLD;
-        boolean upCreated = beforeLocal.y <= VERTICAL_EPSILON
-                && afterLocal.y >= VELOCITY_TRACE_THRESHOLD;
-        boolean reversed = beforeLocal.y <= -VELOCITY_TRACE_THRESHOLD
-                && afterLocal.y >= VELOCITY_TRACE_THRESHOLD;
+        boolean upCreated = beforeLocal.y() <= VERTICAL_EPSILON
+                && afterLocal.y() >= VELOCITY_TRACE_THRESHOLD;
+        boolean reversed = beforeLocal.y() <= -VELOCITY_TRACE_THRESHOLD
+                && afterLocal.y() >= VELOCITY_TRACE_THRESHOLD;
         return "verticalAlert=" + alert
                 + " verticalUpCreated=" + upCreated
                 + " verticalDirectionReversed=" + reversed;
     }
 
     public static String callerStack() {
-        if (!ENABLED) return "disabled";
+        if (!BootDebugOptions.viewStacksEnabled()) return "disabled";
         return WalkerHolder.WALKER.walk(frames -> frames
                 .filter(frame -> meaningfulCaller(frame.getClassName()))
                 .limit(8)
@@ -208,18 +240,6 @@ public final class GravityDebugLog {
         return !className.startsWith(GravityDebugLog.class.getName())
                 && !className.equals(Thread.class.getName())
                 && !className.startsWith("java.lang.StackWalker");
-    }
-
-    private static double velocityTraceThreshold() {
-        String configured = System.getProperty(
-                "gravityengine.debugGravityVelocityThreshold", "0.05"
-        );
-        try {
-            double parsed = Double.parseDouble(configured);
-            return Double.isFinite(parsed) && parsed > 0.0D ? parsed : 0.05D;
-        } catch (NumberFormatException ignored) {
-            return 0.05D;
-        }
     }
 
     private static String entityLabel(Entity entity) {

@@ -31,10 +31,17 @@ import cc.sighs.gravityengine.attitude.BodyAttitudeControlAuthority;
  * righting for it, and no alignment target is accumulated for the moment
  * swimming ends.</p>
  *
- * <p><b>Elytra.</b> {@link #ELYTRA_ALIGNED} is a distinct contract with its own
- * gravity restoring, flight alignment, player-roll and angular-drag sources and
- * its own persistent angular velocity. Those gains and that dynamics are never
- * reused for ordinary upright alignment or for low-gravity swim.</p>
+ * <p><b>Elytra.</b> {@link #ELYTRA_ALIGNED} is a distinct contract that runs a
+ * <em>dynamic flight-attitude policy</em>: a flight intent resolved from
+ * semantic look plus optional velocity alignment, a heading torque that
+ * constrains only the flight forward direction, a sustained player roll
+ * torque about the physical flight forward axis, an optional generic game
+ * angular damping contribution, and the common angular momentum solver
+ * {@code q + L_world + I_body}. It has no gravity-restoring term and no
+ * gravity-tangent flight plane: gravity may change translation velocity, but
+ * the gravity frame never produces a belly-righting torque, a roll target or
+ * a hidden world-up completion. These gains and that dynamics are never reused
+ * for ordinary upright alignment or for low-gravity swim.</p>
  *
  * <p><b>Geometry independence.</b> None of these contracts implies a different
  * ordinary character collider. Attitude updates never call {@code setPos},
@@ -48,6 +55,10 @@ public enum CharacterAttitudeContract {
 
     public boolean viewBodyJointFollow() { return this == FREE_ATTITUDE; }
     public boolean elytraAlignment() { return this == ELYTRA_ALIGNED; }
+    /** True when this contract requires GE-owned angular-momentum dynamics. */
+    public boolean dynamicAttitudeOwnership() {
+        return this == ELYTRA_ALIGNED;
+    }
     public BodyAttitudeControlAuthority inputAuthority() {
         return switch (this) {
             case REFERENCE_ALIGNED -> BodyAttitudeControlAuthority.none();

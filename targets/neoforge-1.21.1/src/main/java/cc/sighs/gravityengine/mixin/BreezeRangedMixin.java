@@ -4,7 +4,6 @@ import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorBridge;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorSnapshot;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
-
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.AimOperands;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
@@ -24,11 +23,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import static cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.bodyHeightPoint;
-import static cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.referenceTangentCarrier;
-import static cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.referenceVerticalComponent;
-import static cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.worldShot;
 
 /**
  * Version-matched Breeze shooting bridge.

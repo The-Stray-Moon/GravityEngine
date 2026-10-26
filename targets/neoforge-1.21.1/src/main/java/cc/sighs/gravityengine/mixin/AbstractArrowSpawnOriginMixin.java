@@ -3,7 +3,6 @@ package cc.sighs.gravityengine.mixin;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorBridge;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorSnapshot;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
-
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.projectile.AbstractArrow;

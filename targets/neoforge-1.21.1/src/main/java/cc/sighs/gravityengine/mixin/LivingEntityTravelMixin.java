@@ -2,6 +2,7 @@ package cc.sighs.gravityengine.mixin;
 
 import cc.sighs.gravityengine.gravity.collision.CollisionSceneCoverageException;
 import cc.sighs.gravityengine.gravity.integration.*;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.movement.CharacterLocomotionTechnique;
 import cc.sighs.gravityengine.gravity.movement.ElytraAerodynamics;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
@@ -9,7 +10,9 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
 import com.llamalad7.mixinextras.sugar.Share;
-import com.llamalad7.mixinextras.sugar.ref.*;
+import com.llamalad7.mixinextras.sugar.ref.LocalDoubleRef;
+import com.llamalad7.mixinextras.sugar.ref.LocalFloatRef;
+import com.llamalad7.mixinextras.sugar.ref.LocalRef;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -19,7 +22,10 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.injection.*;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
+import org.spongepowered.asm.mixin.injection.Slice;
 
 /**
  * 1.21.1 / 21.1.249 travel bridge. The original method selects effects,
@@ -46,10 +52,31 @@ public abstract class LivingEntityTravelMixin {
         if (contribution == null) {
             original.call(entity, speed, input);
         } else {
-            cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime()
-                    .recordSelfWalk(entity.level().getGameTime(), contribution);
+            cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState()
+                    .recordSelfWalk(
+                            entity.level().getGameTime(),
+                            MinecraftMathAdapter.toVec3d(
+                                    contribution
+                            )
+                    );
             entity.setDeltaMovement(entity.getDeltaMovement().add(contribution));
         }
+    }
+
+    /** This exact Vanilla call consumes persistent deltaMovement. Strip only its
+     * credited support part before preprocessing; arbitrary SELF moves do not. */
+    @WrapOperation(method = "handleRelativeFrictionAndCalculateMovement", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/LivingEntity;move(Lnet/minecraft/world/entity/MoverType;Lnet/minecraft/world/phys/Vec3;)V"), require = 1)
+    private void gravityengine$relativeSupportRequest(LivingEntity entity, net.minecraft.world.entity.MoverType mover,
+            Vec3 movement, Operation<Void> original) {
+        var runtime = cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(entity)
+                .gravityengine$gravityComponent().operationState();
+        var pending = runtime.pendingEngineSupportTransport();
+        if (mover == net.minecraft.world.entity.MoverType.SELF && pending.isPresent()) {
+            movement = movement.subtract(MinecraftMathAdapter.toMinecraft(
+                    runtime.supportVelocityContribution().multiply(pending.get().intervalTicks())));
+        }
+        original.call(entity, mover, movement);
     }
 
     @WrapOperation(method = "handleRelativeFrictionAndCalculateMovement", at = @At(value = "NEW",
@@ -68,7 +95,8 @@ public abstract class LivingEntityTravelMixin {
         LivingEntity entity = (LivingEntity) (Object) this;
         Vec3 previousContribution = gravityengine$travelContribution;
         gravityengine$travelContribution = null;
-        try (var context = LivingGravityIntegration.openTravel(entity, input)) {
+        try (var context = LivingGravityIntegration.openTravel(entity, input);
+             var environment = context == null ? null : MovementEnvironmentCapture.open(entity, context.environment())) {
             shared.set(context);
             if (context == null) {
                 original.call(input);
@@ -78,26 +106,54 @@ public abstract class LivingEntityTravelMixin {
                 if (context.characterPlan().locomotion() == CharacterLocomotionTechnique.GROUND_AIR
                         && cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy.usesCustomCollision(entity)) {
                     try {
-                        friction.set(GroundAirGravityMovementHandler.friction(entity, context.runtime()));
+                        friction.set(GroundAirGravityMovementHandler.friction(entity, context.operationState()));
                     } catch (CollisionSceneCoverageException uncovered) {
-                        cc.sighs.gravityengine.gravity.debug.GravityDebugLog.log(entity,
+                        if (cc.sighs.gravityengine.gravity.debug.GravityDebugLog.shouldLog(entity)) cc.sighs.gravityengine.gravity.debug.GravityDebugLog.log(entity,
                                 "material-coverage-fail-closed", "%s", uncovered.getMessage());
                         entity.calculateEntityAnimation(entity instanceof net.minecraft.world.entity.animal.FlyingAnimal);
                         return;
                     }
                     groundInput.set(GroundAirGravityMovementHandler.inputContribution(context, context.input(), friction.get()));
-                    if (context.capturePlan() != null && !context.capturePlan().covers(
-                            entity.getDeltaMovement().add(groundInput.get()))) {
+                    if (context.capturePlan() != null && !context.capturePlan().coversActorMovement(
+                            MinecraftMathAdapter.toVec3d(
+                                    entity.getDeltaMovement()
+                                            .add(groundInput.get())
+                            ))) {
                         entity.calculateEntityAnimation(entity instanceof net.minecraft.world.entity.animal.FlyingAnimal);
                         return;
                     }
                 }
                 original.call(context.input());
             }
+        } catch (cc.sighs.gravityengine.gravity.collision.CollisionComplexityLimitException
+                | CollisionSceneCoverageException unavailable) {
+            // Freeze translation at the last proven body; preserve physical velocity for retry.
+            cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(entity)
+                    .gravityengine$gravityComponent().operationState().invalidateMovementContinuity();
+            cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(entity).gravityengine$setVanillaSupportingBlock(null);
+            entity.setOnGround(false);
+            cc.sighs.gravityengine.gravity.debug.CollisionCoverageDiagnostics.report(entity, unavailable);
         } finally {
             gravityengine$travelContribution = previousContribution;
             shared.set(null);
         }
+    }
+
+    /** .249 bytecode offset 1108 selects drag before move (1132). A body sync
+     * can invalidate native onGround without removing the current physical support. */
+    @WrapOperation(method = "travel", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/LivingEntity;onGround()Z"),
+            slice = @Slice(from = @At(value = "INVOKE",
+                    target = "Lnet/minecraft/world/entity/LivingEntity;getBlockPosBelowThatAffectsMyMovement()Lnet/minecraft/core/BlockPos;",
+                    ordinal = 0),
+                    to = @At(value = "INVOKE",
+                            target = "Lnet/minecraft/world/entity/LivingEntity;handleRelativeFrictionAndCalculateMovement(Lnet/minecraft/world/phys/Vec3;F)Lnet/minecraft/world/phys/Vec3;")),
+            require = 1, allow = 1)
+    private boolean gravityengine$currentGroundForDrag(LivingEntity entity, Operation<Boolean> original,
+            @Share("travel") LocalRef<GravityTravelContext> shared) {
+        var context = shared.get();
+        return context != null && cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy.usesExactBodyCollision(entity)
+                ? GroundAirGravityMovementHandler.groundedAtStart(context) : original.call(entity);
     }
 
     /** Native effects selected slot 2 gravity before entering the Elytra branch. */
@@ -107,9 +163,13 @@ public abstract class LivingEntityTravelMixin {
             @Local(index = 2) double magnitude, @Share("travel") LocalRef<GravityTravelContext> shared,
             @Share("elytraVelocity") LocalRef<Vec3> calculated) {
         var context = shared.get();
-        if (context == null) return;
+        if (context == null || !cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy
+                .committedPlan(context.entity()).usesCustomMoveSolver()) return;
         Vec3 velocity = ElytraGravityMovementHandler.velocity(context, magnitude);
-        if (context.capturePlan() != null && !context.capturePlan().covers(velocity)) {
+        if (context.capturePlan() != null
+                && !context.capturePlan().coversActorMovement(
+                        MinecraftMathAdapter.toVec3d(velocity)
+                )) {
             context.entity().calculateEntityAnimation(context.entity() instanceof net.minecraft.world.entity.animal.FlyingAnimal);
             ci.cancel();
         } else calculated.set(velocity);
@@ -134,7 +194,8 @@ public abstract class LivingEntityTravelMixin {
     private double gravityengine$gravityMagnitude(LivingEntity entity, Operation<Double> original,
             @Share("travel") LocalRef<GravityTravelContext> shared) {
         var context = shared.get();
-        return context == null ? original.call(entity)
+        return context == null || !cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy
+                .committedPlan(entity).usesCustomMoveSolver() ? original.call(entity)
                 : entity.isNoGravity() ? 0.0D : context.sample().accelerationVector().length();
     }
 
@@ -144,7 +205,13 @@ public abstract class LivingEntityTravelMixin {
     private double gravityengine$fallingVertical(Vec3 velocity, Operation<Double> original,
             @Share("travel") LocalRef<GravityTravelContext> shared) {
         return shared.get() == null ? original.call(velocity)
-                : shared.get().frame().worldToLocal(velocity).y;
+                : shared.get().frame()
+                        .worldToLocal(
+                                MinecraftMathAdapter.toVec3d(
+                                        velocity
+                                )
+                        )
+                        .y();
     }
 
     /**
@@ -202,7 +269,15 @@ public abstract class LivingEntityTravelMixin {
         gravityengine$travelContribution = groundInput.get();
         try {
             Vec3 world = original.call(entity, input, friction);
-            return shared.get() == null ? world : shared.get().frame().worldToLocal(world);
+            return shared.get() == null
+                    ? world
+                    : MinecraftMathAdapter.toMinecraft(
+                            shared.get().frame()
+                                    .worldToLocal(
+                                            MinecraftMathAdapter
+                                                    .toVec3d(world)
+                                    )
+                    );
         } finally {
             gravityengine$travelContribution = previous;
         }
@@ -267,6 +342,9 @@ public abstract class LivingEntityTravelMixin {
     private double gravityengine$elytraCollisionSpeed(Vec3 velocity, Operation<Double> original,
             @Share("travel") LocalRef<GravityTravelContext> shared) {
         return shared.get() == null ? original.call(velocity)
-                : ElytraAerodynamics.tangentSpeed(velocity, shared.get().frame().up());
+                : ElytraAerodynamics.tangentSpeed(
+                        MinecraftMathAdapter.toVec3d(velocity),
+                        shared.get().frame().up()
+                );
     }
 }

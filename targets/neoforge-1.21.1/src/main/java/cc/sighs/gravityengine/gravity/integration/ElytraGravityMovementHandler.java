@@ -1,5 +1,6 @@
 package cc.sighs.gravityengine.gravity.integration;
 
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.movement.ElytraAerodynamics;
 import net.minecraft.world.phys.Vec3;
 
@@ -9,12 +10,19 @@ public final class ElytraGravityMovementHandler {
 
     public static Vec3 velocity(GravityTravelContext context, double selectedGravity) {
         var entity = context.entity();
-        Vec3 acceleration = context.sample().accelerationVector();
+        Vec3 acceleration =
+                MinecraftMathAdapter.toMinecraft(
+                        context.sample().accelerationVector()
+                );
         if (selectedGravity == 0.0D) acceleration = Vec3.ZERO;
         else if (selectedGravity < acceleration.length()) acceleration = acceleration.scale(selectedGravity / acceleration.length());
-        return ElytraAerodynamics.step(entity.getDeltaMovement(),
-                context.look().forward(),
-                context.frame().up(),
-                acceleration, false);
+        return MinecraftMathAdapter.toMinecraft(
+                ElytraAerodynamics.step(
+                        MinecraftMathAdapter.toVec3d(
+                                entity.getDeltaMovement()),
+                        context.look().forward(),
+                        context.frame().up(),
+                        MinecraftMathAdapter.toVec3d(acceleration),
+                        false));
     }
 }

@@ -3,80 +3,81 @@ package cc.sighs.gravityengine.client;
 import cc.sighs.gravityengine.network.SyncGravityStatePayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 
 import java.util.Objects;
 
+/**
+ * Client-side gravity snapshot admission.
+ *
+ * <p>Ordinary gravity synchronization is ordered by the native server
+ * lifecycle: NeoForge sends the entity pairing bundle before
+ * {@code StartTracking}, and player replacement happens before the
+ * login/respawn hooks. A snapshot whose target entity identity is absent or
+ * mismatched is therefore stale transport data, not an entity-lifetime
+ * binding request: it is dropped and the next native lifecycle boundary
+ * supplies fresh state.</p>
+ */
 public final class ClientGravitySyncService {
     private ClientGravitySyncService() {}
-    public record SnapshotResult(boolean assignmentAccepted, boolean influenceAccepted,
-                                 cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator.TransitionStatus status, boolean geometryChanged) {}
+
+    public record SnapshotResult(
+            boolean assignmentAccepted,
+            boolean influenceAccepted
+    ) {}
 
     public static void handle(SyncGravityStatePayload pkt) {
         if (pkt == null) return;
-        ClientLevel l = Minecraft.getInstance().level;
-        if (l == null || !Objects.equals(pkt.dimensionId(), l.dimension().location())) {
-            PendingSnapshotStore.offer(pkt);
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level == null
+                || !Objects.equals(
+                pkt.dimensionId(),
+                level.dimension().location())) {
             return;
         }
-        Entity e = l.getEntity(pkt.entityId());
-        if (e == null) {
-            PendingSnapshotStore.offer(pkt);
+        Entity entity = level.getEntity(pkt.entityId());
+        if (entity == null || !entity.getUUID().equals(pkt.entityUuid())) {
+            /*
+             * The intended entity does not exist (or the numeric id now belongs
+             * to another identity). Native pairing guarantees a later fresh
+             * synchronization, so the snapshot is dropped rather than carried
+             * across an entity object lifetime.
+             */
             return;
         }
-        // Verify UUID matches before applying
-        if (!e.getUUID().equals(pkt.entityUuid())) {
-            // Stale entity ID resolved to a different entity - discard
-            return;
+        // Protocol 25 transfers player assignment only inside a complete body transaction.
+        if (entity instanceof net.minecraft.world.entity.player.Player) {
+            throw new IllegalArgumentException("standalone player gravity snapshot");
         }
-        applySnapshot(e, pkt);
+        applySnapshot(entity, pkt);
     }
 
-    public static SnapshotResult applySnapshot(Entity e, SyncGravityStatePayload pkt) {
-        var r = cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator.applyRemoteSnapshot(
-                e,
-                pkt.toState(),
-                pkt.authorityMode(),
-                pkt.fieldPresent(),
-                pkt.assignmentRevision(),
-                pkt.suppressionReason(),
-                pkt.influenceRevision());
-        var app = r.application();
-        return new SnapshotResult(r.assignmentAccepted(), r.influenceAccepted(), app.status(), app.geometryChanged());
-    }
-
-    /**
-     * Current-format pending application. Rebuilds a complete
-     * {@link SyncGravityStatePayload} from the stored assignment and
-     * suppression snapshots and routes it through the same function as the
-     * immediate packet path. Authority comes from the decoded assignment.
-     */
-    static SnapshotResult applyPending(Entity e, PendingSnapshotStore.PendingSnap snap) {
-        if (e == null) {
-            return new SnapshotResult(
-                    false,
-                    false,
-                    cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator.TransitionStatus.UNCHANGED,
-                    false
-            );
+    public static SnapshotResult applySnapshot(
+            Entity entity,
+            SyncGravityStatePayload pkt
+    ) {
+        if (entity.isRemoved()
+                || entity.getId() != pkt.entityId()
+                || !entity.getUUID().equals(pkt.entityUuid())
+                || !entity.level().dimension().location().equals(pkt.dimensionId())) {
+            return new SnapshotResult(false, false);
         }
-        PendingSnapshotStore.AssignmentSnapshot assignment = snap.assignment();
-        PendingSnapshotStore.SuppressionSnapshot suppression = snap.suppression();
-        ResourceLocation dimensionId = e.level().dimension().location();
-        SyncGravityStatePayload payload = new SyncGravityStatePayload(
-                e.getId(),
-                e.getUUID(),
-                dimensionId,
-                assignment.revision(),
-                assignment.state().down(),
-                assignment.state().strength(),
-                suppression.revision(),
-                suppression.reason(),
-                assignment.authority(),
-                assignment.fieldPresent()
-        );
-        return applySnapshot(e, payload);
+        var result =
+                cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator
+                        .applyRemoteSnapshot(
+                                entity,
+                                pkt.toState(),
+                                pkt.authorityMode(),
+                                pkt.fieldPresence(),
+                                pkt.assignmentSyncRevision(),
+                                pkt.suppressionReason(),
+                                pkt.influenceRevision());
+        if (!(entity instanceof net.minecraft.world.entity.player.Player)) {
+            cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator
+                    .applyRemoteApplication(entity, pkt.application(), pkt.applicationEpoch());
+        }
+        return new SnapshotResult(
+                result.assignmentAccepted(),
+                result.influenceAccepted());
     }
-    public static int pendingCount() { return PendingSnapshotStore.pendingCount(); }
 }

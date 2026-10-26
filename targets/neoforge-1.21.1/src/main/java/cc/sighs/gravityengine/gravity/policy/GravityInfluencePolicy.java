@@ -1,26 +1,25 @@
 package cc.sighs.gravityengine.gravity.policy;
 
+import cc.sighs.gravityengine.gravity.geometry.BodyRepresentation;
+import cc.sighs.gravityengine.gravity.policy.GravityReferencePolicy;
+
 import cc.sighs.gravityengine.gravity.GravityState;
 import cc.sighs.gravityengine.gravity.component.EntityGravityComponent;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
-import cc.sighs.gravityengine.gravity.model.*;
+import cc.sighs.gravityengine.gravity.model.GravityApplicationPlan;
+import cc.sighs.gravityengine.gravity.model.GravityCollisionRoute;
+import cc.sighs.gravityengine.gravity.model.GravitySuppressionReason;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
-import cc.sighs.gravityengine.gravity.integration.GravityOperation;
+import net.minecraft.world.entity.LivingEntity;
 
 import java.util.Objects;
 
 public final class GravityInfluencePolicy {
-    public enum CollisionRoute {
-        VANILLA,
-        PASSIVE_AABB,
-        EXACT_BODY
-    }
-
     private GravityInfluencePolicy() {}
 
-    public static GravitySuppressionReason authoritativeSuppression(Entity e) { return component(e).authoritativeSuppression(); }
-    public static GravityApplicationPlan committedPlan(Entity e) { return component(e).appliedPlan(); }
+    public static GravitySuppressionReason authoritativeSuppression(Entity e) { return component(e).state().authoritativeSuppression(); }
+    public static GravityApplicationPlan committedPlan(Entity e) { return component(e).state().appliedPlan(); }
 
     private static final double PASSIVE_DEFAULT_DOWN_EPSILON_SQUARED = 1.0E-12D;
 
@@ -41,30 +40,44 @@ public final class GravityInfluencePolicy {
         return committedPlan(entity).usesCustomMoveSolver();
     }
     public static boolean usesCustomBody(Entity e) {
-        var frame = component(e).runtime().geometryReferenceFrame();
-        return frame != null && requiresReferenceGeometry(frame);
+        return BodyRepresentation.ofAxis(component(e).operationState().installedCollisionUp()).isExact();
     }
 
-    public static boolean requiresReferenceGeometry(cc.sighs.gravityengine.gravity.GravityFrame frame) {
-        return frame.down().distanceToSqr(GravityState.DEFAULT_DOWN) > PASSIVE_DEFAULT_DOWN_EPSILON_SQUARED;
-    }
     /** Installed non-default character geometry requires exact collision until a safe
      * reference transition replaces it. Actor attitude never selects this route.
      * Default-equivalent character frames delegate to Vanilla. */
-    public static CollisionRoute collisionRoute(Entity entity) {
+    public static GravityCollisionRoute collisionRoute(Entity entity) {
         Objects.requireNonNull(entity, "entity");
+        if (cc.sighs.gravityengine.gravity.integration.FallingBlockTickIntegration.isUnavailable(entity))
+            return GravityCollisionRoute.VANILLA;
         GravityApplicationPlan plan = committedPlan(entity);
 
+        // Reference rotation and collision ownership are independent. Discovery
+        // consumes the already captured scene, never invokes providers again.
+        var operation = component(entity).operationState().collisionOperation();
+        if (cc.sighs.gravityengine.gravity.integration.MovementModeIntegration.allowsExternalCollision(entity) && operation != null) {
+            var bounds = operation.scene() instanceof cc.sighs.gravityengine.gravity.collision.CapturedCollisionScene captured
+                    ? captured.domain().staticBounds()
+                    : cc.sighs.gravityengine.gravity.minecraft.collision.MinecraftCollisionGeometryAdapter
+                            .toAabb3d(entity.getBoundingBox());
+            if (operation.scene().dynamicObstacles().stream().anyMatch(obstacle ->
+                    !obstacle.providerNamespace().equals(cc.sighs.gravityengine.gravity.collision
+                            .RigidObstacleIdentity.NATIVE_PROVIDER_NAMESPACE)
+                            && obstacle.operationSweptBounds().intersects(bounds))) {
+                return GravityCollisionRoute.EXACT_BODY;
+            }
+        }
+
         if (usesCustomBody(entity) || plan.kind() == GravityApplicationPlan.Kind.CHARACTER
-                && requiresReferenceGeometry(cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess.authoritativeFrame(entity))) {
-            return CollisionRoute.EXACT_BODY;
+                && BodyRepresentation.requiresReferenceGeometry(cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess.authoritativeFrame(entity))) {
+            return GravityCollisionRoute.EXACT_BODY;
         }
 
         if (plan.kind() != GravityApplicationPlan.Kind.PASSIVE) {
-            return CollisionRoute.VANILLA;
+            return GravityCollisionRoute.VANILLA;
         }
 
-        var runtime = component(entity).runtime();
+        var runtime = component(entity).operationState();
 
         /*
          * A passive collision solve requires the frozen frame owned by the active
@@ -72,46 +85,87 @@ public final class GravityInfluencePolicy {
          * passive collision snapshot and vanilla remains authoritative.
          */
         if (!runtime.isInMove()) {
-            return CollisionRoute.VANILLA;
+            return GravityCollisionRoute.VANILLA;
         }
 
         return runtime.activeFrame()
                 .down()
-                .distanceToSqr(GravityState.DEFAULT_DOWN)
+                .distanceSquared(GravityState.DEFAULT_DOWN)
                 > PASSIVE_DEFAULT_DOWN_EPSILON_SQUARED
-                ? CollisionRoute.PASSIVE_AABB
-                : CollisionRoute.VANILLA;
+                ? GravityCollisionRoute.PASSIVE_AABB
+                : GravityCollisionRoute.VANILLA;
     }
 
     public static boolean usesExactBodyCollision(Entity entity) {
-        return collisionRoute(entity) == CollisionRoute.EXACT_BODY;
+        return collisionRoute(entity) == GravityCollisionRoute.EXACT_BODY;
+    }
+
+    /** Discovery eligibility only; registration alone never selects a solver. */
+    public static boolean hasExternalCollisionProviders(Entity entity) {
+        return cc.sighs.gravityengine.gravity.integration.MovementModeIntegration.allowsExternalCollision(entity)
+                && !cc.sighs.gravityengine.gravity.collision.provider.RigidCollisionPublicationRegistry
+                        .providers(entity.level()).isEmpty();
     }
 
     public static boolean usesPassiveCollision(Entity entity) {
-        return collisionRoute(entity) == CollisionRoute.PASSIVE_AABB;
+        return collisionRoute(entity) == GravityCollisionRoute.PASSIVE_AABB;
     }
 
     public static boolean usesCustomCollision(Entity entity) {
-        return collisionRoute(entity) != CollisionRoute.VANILLA;
+        return collisionRoute(entity) != GravityCollisionRoute.VANILLA;
     }
-    /** Scalar-look authority follows the accepted reference, not pending assignment. */
+    /**
+     * True when the entity currently has an environmental gravity reference
+     * that presentation may consume. This is independent from the committed
+     * application kind, locomotion mode, swimming/climbing pose and installed
+     * collision representation.
+     */
+    public static boolean hasGravityReference(Entity entity) {
+        Objects.requireNonNull(entity, "entity");
+        if (!hasPresentationCapability(entity)) {
+            return false;
+        }
+        var component = component(entity);
+        return GravityReferencePolicy.hasGravityReference(
+                component.state().assignedAuthority(),
+                /*
+                 * Deliberate UNKNOWN policy for an unresolved reconciliation:
+                 * a previously confirmed reference stays provisionally in
+                 * force (the committed application is not replaced while
+                 * evidence is unknown), while a restored seed that never
+                 * confirmed presence claims no reference. Callers that need a
+                 * proven answer use GravityEntityState.fieldPresence().
+                 */
+                component.state().fieldReferenceInForce(),
+                component.state().authoritativeSuppression(),
+                true,
+                cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess
+                        .authoritativeFrame(entity)
+        );
+    }
+
+    private static boolean hasPresentationCapability(Entity entity) {
+        if (!(entity instanceof LivingEntity living)
+                || GravityEntityCapabilitiesPolicy.capabilities(entity)
+                != cc.sighs.gravityengine.gravity.model.GravityEntityCapabilities.CHARACTER
+                || entity.isRemoved()
+                || entity.isSpectator()
+                || entity.noPhysics
+                || entity.isPassenger()
+                || living.isSleeping()) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Scalar-look authority follows the accepted environmental reference. */
     public static boolean usesGravityLocalLook(Entity entity) {
-        var c = component(entity);
-        return c.effectiveSuppression() == GravitySuppressionReason.NONE
-                && c.appliedPlan().usesGravityLocalLook()
-                && requiresReferenceGeometry(
-                        cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess
-                                .authoritativeFrame(entity));
+        return hasGravityReference(entity);
     }
 
     /** Presentation has its own capability gate; collision route is not that gate. */
     public static boolean usesCustomPresentation(Entity entity) {
-        var c = component(entity);
-        return c.effectiveSuppression() == GravitySuppressionReason.NONE
-                && c.appliedPlan().usesCustomPresentation()
-                && requiresReferenceGeometry(
-                        cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess
-                                .authoritativeFrame(entity));
+        return hasGravityReference(entity);
     }
 
     public static GravitySuppressionReason deriveAuthoritativeSuppression(Entity e) {

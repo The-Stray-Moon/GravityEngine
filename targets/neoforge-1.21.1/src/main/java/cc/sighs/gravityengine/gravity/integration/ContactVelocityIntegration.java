@@ -1,17 +1,18 @@
 package cc.sighs.gravityengine.gravity.integration;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.gravity.collision.*;
 import cc.sighs.gravityengine.gravity.debug.GravityDebugLog;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
-import cc.sighs.gravityengine.gravity.model.*;
-import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
-import cc.sighs.gravityengine.gravity.runtime.GravityRuntimeState;
-import java.util.List;
-import java.util.Objects;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
+import cc.sighs.gravityengine.gravity.model.GravityCollisionRoute;
+import cc.sighs.gravityengine.gravity.runtime.GravityOperationState;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Vector3d;
+
+import java.util.List;
+import java.util.Objects;
 
 /**
  * Contact-velocity response integration for the {@code Entity.move} boundary.
@@ -35,7 +36,7 @@ public final class ContactVelocityIntegration {
         return result != null && !result.indeterminate();
     }
 
-    /** Detached plane projection for collision diagnostics. A different
+    /** Detached plane projection for immutable constraints and focused tests. A different
      * desired direction requires finite revalidation via the Entity overload
      * at production boundaries; this overload never queries live state. */
     public static ContactVelocityResolution resolveContactVelocityResult(
@@ -52,7 +53,7 @@ public final class ContactVelocityIntegration {
         }
 
         return projectConstraints(
-                velocity,
+                MinecraftMathAdapter.toVec3d(velocity),
                 result.contactVelocityConstraints()
         );
     }
@@ -67,20 +68,20 @@ public final class ContactVelocityIntegration {
         if (result == null || !result.isAuthoritative()) {
             throw new IllegalStateException("velocity requires a determinate move");
         }
-        var operation = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime().collisionOperation();
+        var operation = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState().collisionOperation();
         if (operation == null) throw new IllegalStateException("contact velocity requires the owning collision operation");
-        var body = GravityEntityGeometry.body(entity, result.frame());
-        var desired = MinecraftGeometryAdapter.toJoml(velocity, new Vector3d());
+        var body = GravityEntityGeometry.body(entity);
+        var desired = MinecraftMathAdapter.toVec3d(velocity);
         try {
             var contacts = CurrentContactQuery.velocityContacts(
                     body, desired, operation.scene(), operation.time().intervalTicks(), operation.geometryContext());
             var constraints = CurrentContactConstraintBuilder.characterConstraints(
                     body, contacts, desired, result.frame(), 1.0D, operation.geometryContext());
-            return projectConstraints(velocity, constraints);
+            return projectConstraints(desired, constraints);
         } catch (CollisionComplexityLimitException exhausted) {
             // No trustworthy finite activation set exists. Stop velocity at
             // this boundary without rejecting/re-solving the accepted move.
-            return ContactVelocityResolution.unresolved(velocity);
+            return ContactVelocityResolution.unresolved(desired);
         }
     }
 
@@ -95,6 +96,7 @@ public final class ContactVelocityIntegration {
             ContactVelocityResolution resolution,
             String phase
     ) {
+        if (!GravityDebugLog.shouldLog(entity)) return;
         Objects.requireNonNull(entity, "entity");
         Objects.requireNonNull(result, "result");
         Objects.requireNonNull(resolution, "resolution");
@@ -102,8 +104,7 @@ public final class ContactVelocityIntegration {
         if (!resolution.fallbackApplied()) {
             return;
         }
-        GravityDebugLog.log(
-                entity,
+        GravityDebugLog.log(entity,
                 "velocity-response-fallback",
                 "CONTACT_VELOCITY_FALLBACK; phase=%s desired=%s committed=%s "
                         + "constraints=%s grounded=%s blockedDown=%s "
@@ -125,7 +126,7 @@ public final class ContactVelocityIntegration {
      * together with a usable committed velocity.
      */
     private static ContactVelocityResolution projectConstraints(
-            Vec3 velocity,
+            Vec3d velocity,
             List<ContactConstraintProjector.Constraint> constraints
     ) {
         if (constraints.isEmpty()) {
@@ -134,10 +135,7 @@ public final class ContactVelocityIntegration {
 
         ContactConstraintProjector.Result projected =
                 ContactConstraintProjector.project(
-                        MinecraftGeometryAdapter.toJoml(
-                                velocity,
-                                new Vector3d()
-                        ),
+                        velocity,
                         constraints
                 );
 
@@ -149,18 +147,12 @@ public final class ContactVelocityIntegration {
             );
         }
 
-        Vec3 resolved =
-                MinecraftGeometryAdapter.toMinecraft(
-                        projected.requireProjectedVector()
-                );
+        Vec3d resolved = projected.requireProjectedVector();
 
         for (ContactConstraintProjector.Constraint constraint
                 : constraints) {
             if (constraint.normal().dot(
-                    MinecraftGeometryAdapter.toJoml(
-                            resolved,
-                            new Vector3d()
-                    )
+                    resolved
             ) < constraint.minimumDot()
                     - ContactConstraintProjector.FEASIBILITY_EPSILON * 4.0D) {
                 throw new IllegalStateException(
@@ -172,7 +164,11 @@ public final class ContactVelocityIntegration {
             }
         }
 
-        return ContactVelocityResolution.feasible(resolved, constraints);
+        return ContactVelocityResolution.feasible(
+                velocity,
+                resolved,
+                constraints
+        );
     }
 
     /**
@@ -180,37 +176,62 @@ public final class ContactVelocityIntegration {
      * Projects onto {@code n_i dot v >= 0}, which always contains zero and
      * therefore always yields a finite velocity without adding momentum.
      */
-    private static Vec3 nonPenetratingFallback(
-            Vec3 desiredVelocity,
+    private static Vec3d nonPenetratingFallback(
+            Vec3d desiredVelocity,
             List<ContactConstraintProjector.Constraint> constraints
     ) {
-        return MinecraftGeometryAdapter.toMinecraft(
-                ContactConstraintProjector.projectNonPenetrating(
-                        MinecraftGeometryAdapter.toJoml(
-                                desiredVelocity,
-                                new Vector3d()
-                        ),
-                        constraints
-                )
+        return ContactConstraintProjector.projectNonPenetrating(
+                desiredVelocity,
+                constraints
         );
     }
 
-    /**
-     * Ordinary Entity.move contact-velocity publication, called exactly once
-     * at the native join after fall/step callbacks. Preflight and
-     * later travel acceleration/friction calculations remain pure queries.
-     */
+    /** Retain only support credit admitted by the same finite contact response. */
+    public static void retainSupportContribution(GravityOperationState runtime, ContactVelocityResolution response) {
+        var credit = runtime.supportVelocityContribution();
+        if (credit.lengthSquared() == 0) return;
+        if (response.infeasible()) {
+            runtime.setSupportVelocityContribution(Vec3d.ZERO);
+            return;
+        }
+        // Remove support momentum blocked by the same finite contacts. Positive
+        // bounds can inject momentum from another moving obstacle; that impulse
+        // stays in world velocity and must not be relabelled as support carry.
+        var constraints = response.constraints().stream().map(c ->
+                new ContactConstraintProjector.Constraint(c.normal(), Math.min(0, c.minimumDot()))).toList();
+        runtime.setSupportVelocityContribution(ContactConstraintProjector.project(credit, constraints).requireProjectedVector());
+    }
+
+    /** Reconcile completed landing writes before native step damping. The native
+     * join calls this again for branches without stepOn; claiming is idempotent. */
+    public static void prepareStepVelocity(Entity entity) {
+        if (entity instanceof net.minecraft.world.entity.item.FallingBlockEntity) return;
+        var runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState();
+        var missing = runtime.claimSupportVelocity(runtime.currentMoveResult());
+        if (missing.lengthSquared() != 0) entity.setDeltaMovement(entity.getDeltaMovement()
+                .add(MinecraftMathAdapter.toMinecraft(missing)));
+    }
+
     public static void commitMoveContactVelocity(Entity entity) {
-        GravityRuntimeState runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime();
-        if (EntityMovementIntegration.movementRoute(entity) == GravityInfluencePolicy.CollisionRoute.PASSIVE_AABB) {
+        GravityOperationState runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState();
+        if (EntityMovementIntegration.activeMovementCollisionRoute(entity)
+                == GravityCollisionRoute.PASSIVE_AABB) {
             entity.setDeltaMovement(PassiveGravityCollisionIntegration.projectVelocity(
                     runtime.currentPassiveMoveResult(), entity.getDeltaMovement()));
             return;
         }
         GravityMoveResult result = runtime.currentMoveResult();
         if (result == null || !result.isAuthoritative()) return;
-        ContactVelocityResolution response = resolveContactVelocityResult(entity, result, entity.getDeltaMovement());
+        prepareStepVelocity(entity); // Also covers native branches that skip stepOn.
+        Vec3 desired = entity.getDeltaMovement();
+        ContactVelocityResolution response = resolveContactVelocityResult(entity, result, desired);
+        retainSupportContribution(runtime, response);
         logVelocityFallback(entity, result, response, "entity-move-contact");
-        entity.setDeltaMovement(response.velocity());
+        entity.setDeltaMovement(
+                MinecraftMathAdapter.toMinecraft(response.velocity()));
+        if (GravityDebugLog.shouldLogMovement(entity)) {
+            cc.sighs.gravityengine.gravity.integration.diagnostics.MovementCollisionDiagnostics
+                    .recordVelocityResolution(entity, result, response);
+        }
     }
 }

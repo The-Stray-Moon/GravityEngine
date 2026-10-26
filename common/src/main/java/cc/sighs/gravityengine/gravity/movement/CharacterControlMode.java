@@ -28,6 +28,16 @@ public final class CharacterControlMode {
     public void retainIfEligible(
             boolean eligible
     ) {
+        retainIfEligible(eligible, eligible);
+    }
+
+    /** Unknown support may retain active ownership, but breaks activation proof. */
+    public void retainIfEligible(boolean eligible, boolean mayContinue) {
+        if (!eligible && mayContinue) {
+            consecutiveEligibleSteps = 0;
+            pendingSwimToggle = false;
+            return;
+        }
         if (!eligible) {
             swimActive = false;
             consecutiveEligibleSteps = 0;

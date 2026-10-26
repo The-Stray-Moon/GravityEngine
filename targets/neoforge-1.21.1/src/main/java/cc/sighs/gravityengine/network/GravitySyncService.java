@@ -10,40 +10,51 @@ import java.util.Objects;
  * Server-side gravity synchronization.
  *
  * <p>Packets carry assignment and influence revisions for ordered
- * client-side application.</p>
+ * client-side application. Fresh state is emitted from native server lifecycle
+ * boundaries: entity pairing/StartTracking, player login, respawn and dimension
+ * change. There is no synthetic entity-lifetime packet, because NeoForge
+ * already orders entity spawn/pairing before {@code StartTracking} and player
+ * replacement before the login/respawn hooks.</p>
  */
 public final class GravitySyncService {
     private GravitySyncService() {}
 
     public static void syncPlayer(ServerPlayer player) {
         Objects.requireNonNull(player, "player");
+        if (pending(player)) return;
         PacketDistributor.sendToPlayer(
                 player,
-                SyncGravityStatePayload.from(player)
+                ClientboundPlayerBodyCommitPayload.capture(player, null)
+                        .withMode(ClientboundPlayerBodyCommitPayload.CommitMode.TRANSACTION)
         );
     }
 
     public static void syncEntityToPlayer(ServerPlayer player, Entity target) {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(target, "target");
-        PacketDistributor.sendToPlayer(
-                player,
-                SyncGravityStatePayload.from(target)
-        );
-        if (target instanceof ServerPlayer tracked && target != player) {
-            PacketDistributor.sendToPlayer(player, ClientboundPlayerBodyCommitPayload.capture(tracked, null));
+        if (pending(target)) return;
+        if (target instanceof ServerPlayer tracked) {
+            var snapshot = ClientboundPlayerBodyCommitPayload.capture(tracked, null);
+            PacketDistributor.sendToPlayer(player, tracked == player
+                    ? snapshot.withMode(ClientboundPlayerBodyCommitPayload.CommitMode.TRANSACTION) : snapshot);
+        } else {
+            PacketDistributor.sendToPlayer(player, SyncGravityStatePayload.from(target));
         }
     }
 
     public static void syncTracking(Entity entity) {
         Objects.requireNonNull(entity, "entity");
-        PacketDistributor.sendToPlayersTrackingEntityAndSelf(
-                entity,
-                SyncGravityStatePayload.from(entity)
-        );
+        if (pending(entity)) return;
         if (entity instanceof ServerPlayer player) {
-            PacketDistributor.sendToPlayersTrackingEntity(player,
-                    ClientboundPlayerBodyCommitPayload.capture(player, null));
+            // Assignment/evidence changes join the final body publication. Do
+            // not send an intermediate tuple before the connection handoff.
+            cc.sighs.gravityengine.gravity.integration.geometry.PlayerBodyHandoff.markApplicationChanged(player);
+        } else {
+            PacketDistributor.sendToPlayersTrackingEntity(entity, SyncGravityStatePayload.from(entity));
         }
+    }
+
+    private static boolean pending(Entity entity) {
+        return entity.isRemoved();
     }
 }

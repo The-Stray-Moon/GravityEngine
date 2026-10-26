@@ -1,54 +1,74 @@
 package cc.sighs.gravityengine.gravity.kinematic.geometry;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.math.ScalarMath;
 import cc.sighs.gravityengine.math.geometry.Aabb3d;
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
 
 /**
  * Immutable exact locomotion geometry. Minecraft's public entity AABB is only
  * the conservative broadphase proxy returned by {@link #enclosingAabb()}.
  *
  * <p>This type is part of the neutral kinematic kernel: it exposes only
- * generic geometry ({@link Aabb3d} and JOML vectors).  Minecraft conversion
+ * generic geometry ({@link Aabb3d} and {@link Vec3d}). Minecraft conversion
  * happens in the collision adapter layer, never inside the kernel.</p>
  */
 public sealed interface CollisionBody permits OrientedBox, CharacterCapsule {
-    /** Fresh defensive world-space center copy. */
-    Vector3d center();
+    Vec3d center();
 
     /** Immutable conservative world-axis-aligned enclosing bounds. */
     Aabb3d enclosingAabb();
 
-    CollisionBody move(Vector3dc displacement);
+    CollisionBody move(Vec3d displacement);
 
-    default Vector3d closestPointTo(Vector3dc point) {
-        return switch(this) {
-            case OrientedBox b -> b.closestPointTo(point);
-            case CharacterCapsule c -> {
-                Vector3d delta=new Vector3d(point).sub(c.center());
-                Vector3d spine=c.center().fma(Math.clamp(delta.dot(c.axis()),
-                        -c.halfSegmentLength(),c.halfSegmentLength()),c.axis());
-                Vector3d offset=new Vector3d(point).sub(spine);
-                if(offset.lengthSquared()>c.radius()*c.radius()) offset.normalize().mul(c.radius());
-                yield spine.add(offset);
+    default Vec3d closestPointTo(Vec3d point) {
+        if (this instanceof OrientedBox b) {
+            return b.closestPointTo(point);
+        }
+        if (this instanceof CharacterCapsule c) {
+            Vec3d delta = point.subtract(c.center());
+            Vec3d spine = c.center().fma(
+                    ScalarMath.clamp(
+                            delta.dot(c.axis()),
+                            -c.halfSegmentLength(),
+                            c.halfSegmentLength()
+                    ),
+                    c.axis()
+            );
+            Vec3d offset = point.subtract(spine);
+            if (offset.lengthSquared() > c.radius() * c.radius()) {
+                offset = offset.normalized().multiply(c.radius());
             }
-        };
+            return spine.add(offset);
+        }
+        throw new IllegalStateException(
+                "Unhandled collision body type: " + getClass().getName()
+        );
     }
 
     /** Query-only local-body deflation, distinct from proxy AABB deflation. */
     default CollisionBody deflated(double amount) {
         if(!Double.isFinite(amount)||amount<0) throw new IllegalArgumentException("invalid deflation");
-        return switch(this) {
-            case OrientedBox b -> new OrientedBox(b.center(),b.halfExtents().sub(amount,amount,amount).max(new Vector3d()),b.orientation());
-            case CharacterCapsule c -> new CharacterCapsule(c.center(),c.axis(),Math.max(0,c.radius()-amount),c.halfSegmentLength());
-        };
+        if (this instanceof OrientedBox b) {
+            return new OrientedBox(
+                    b.center(),
+                    b.halfExtents()
+                            .subtract(amount, amount, amount)
+                            .componentMax(Vec3d.ZERO),
+                    b.orientation());
+        }
+        if (this instanceof CharacterCapsule c) {
+            return new CharacterCapsule(c.center(),c.axis(),Math.max(0,c.radius()-amount),c.halfSegmentLength());
+        }
+        throw new IllegalStateException(
+                "Unhandled collision body type: " + getClass().getName()
+        );
     }
 
     /**
      * Pure mathematical swept bounds. Geometry defines geometry; the
      * collision broadphase applies its own contact-slop inflation.
      */
-    default Aabb3d rawSweptAabb(Vector3dc movement) {
+    default Aabb3d rawSweptAabb(Vec3d movement) {
         return enclosingAabb().expandTowards(movement);
     }
 
@@ -61,7 +81,7 @@ public sealed interface CollisionBody permits OrientedBox, CharacterCapsule {
     default boolean geometricallyEquals(CollisionBody other) {
         if (other == null) return false;
         if (this == other) return true;
-        return center().sub(other.center()).lengthSquared() <= 1.0E-12D
+        return center().subtract(other.center()).lengthSquared() <= 1.0E-12D
                 && enclosingAabb().equals(other.enclosingAabb());
     }
 }

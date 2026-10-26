@@ -1,17 +1,19 @@
 package cc.sighs.gravityengine.gravity.integration.vanilla;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CharacterCapsule;
-import java.util.function.Predicate;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
-import javax.annotation.Nullable;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Vector3d;
+
+import javax.annotation.Nullable;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Gameplay targeting bridge: view rays, hit-result selection and projectile
@@ -349,22 +351,11 @@ public final class VanillaTargetingBridge {
                     .distanceToSqr(point);
         }
 
-        Vector3d closest =
-                exact.closestPointTo(
-                        new Vector3d(
-                                point.x,
-                                point.y,
-                                point.z
-                        )
-                );
+        Vec3d pointValue =
+                MinecraftMathAdapter.toVec3d(point);
+        Vec3d closest = exact.closestPointTo(pointValue);
 
-        return point.distanceToSqr(
-                new Vec3(
-                        closest.x,
-                        closest.y,
-                        closest.z
-                )
-        );
+        return closest.distanceSquared(pointValue);
     }
 
     public static Optional<Vec3> refineProjectileCandidateClip(
@@ -450,10 +441,15 @@ public final class VanillaTargetingBridge {
             Vec3 end
     ) {
         CharacterCapsule volume = exact.inflated(radius);
-        Vector3d from = new Vector3d(start.x, start.y, start.z);
-        Vector3d to = new Vector3d(end.x, end.y, end.z);
+        Vec3d from =
+                MinecraftMathAdapter.toVec3d(start);
+        Vec3d to =
+                MinecraftMathAdapter.toVec3d(end);
+
         double[] interval = volume.segmentInterval(from, to);
-        boolean contains = volume.closestPointTo(from).distanceSquared(from) <= 1e-24;
+        boolean contains =
+                volume.closestPointTo(from)
+                        .distanceSquared(from) <= 1.0E-24D;
         return new CandidateGeometry(contains, interval == null ? Optional.empty()
                 : Optional.of(start.lerp(end, interval[0])));
 

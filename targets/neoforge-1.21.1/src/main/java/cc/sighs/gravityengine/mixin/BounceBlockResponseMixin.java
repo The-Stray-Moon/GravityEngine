@@ -55,6 +55,8 @@ public abstract class BounceBlockResponseMixin {
             double z,
             Operation<Void> original
     ) {
+        var expected = cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(entity)
+                .gravityengine$gravityComponent().operationState().currentMoveResult();
         Vec3 world =
                 VanillaBlockResponse.fallWorld(
                         entity,
@@ -67,5 +69,6 @@ public abstract class BounceBlockResponseMixin {
                 world.y,
                 world.z
         );
+        VanillaBlockResponse.recordFallWrite(entity, expected);
     }
 }

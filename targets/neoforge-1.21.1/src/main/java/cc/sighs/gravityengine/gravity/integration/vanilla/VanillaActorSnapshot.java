@@ -2,10 +2,10 @@ package cc.sighs.gravityengine.gravity.integration.vanilla;
 
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CharacterCapsule;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.look.SemanticLookSnapshot;
 import cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Vector3d;
 
 import java.util.Objects;
 
@@ -21,13 +21,13 @@ import java.util.Objects;
  *       independent from actor attitude and model heading;</li>
  *   <li>{@code look} - one semantic-look snapshot captured against that same
  *       frame;</li>
- *   <li>physical geometry - gravity reference feet Fg, center C, eye, width, height and nominal eye
+ *   <li>physical geometry - installed-body feet, center C, eye, width, height and nominal eye
  *       height.</li>
  * </ul>
  *
  * No live {@code Entity}, {@code Level}, supplier, callback or mutable
  * component is retained.  Snapshots are invocation-local and must never be
- * stored across ticks or inside {@code GravityRuntimeState}.
+ * stored across ticks or inside {@code GravityOperationState}.
  */
 public record VanillaActorSnapshot(
         GravityFrame referenceFrame,
@@ -41,7 +41,7 @@ public record VanillaActorSnapshot(
         double eyeHeight,
         boolean customBody
 ) {
-    /** Vanilla entity/network anchor P; feet() is the gravity reference Fg. */
+    /** Vanilla entity/network anchor P; feet() belongs to the installed body. */
     public Vec3 positionAnchor() {
         return cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry
                 .positionAnchorFromBodyCenter(center, height);
@@ -68,17 +68,23 @@ public record VanillaActorSnapshot(
 
     /** Environmental reference up ({@code GravityFrame.up()}). */
     public Vec3 referenceUp() {
-        return referenceFrame.up();
+        return MinecraftMathAdapter.toMinecraft(
+                referenceFrame.up()
+        );
     }
 
     /** Environmental reference down ({@code GravityFrame.down()}). */
     public Vec3 referenceDown() {
-        return referenceFrame.down();
+        return MinecraftMathAdapter.toMinecraft(
+                referenceFrame.down()
+        );
     }
 
     /** Attachment up; this is not an alias of {@link #referenceUp()}. */
     public Vec3 attachmentUp() {
-        return axisToMinecraft(attachmentFrame.axisY(new Vector3d()));
+        return MinecraftMathAdapter.toMinecraft(
+                attachmentFrame.axisY()
+        );
     }
 
     /** Attachment down; opposite of {@link #attachmentUp()}. */
@@ -88,17 +94,19 @@ public record VanillaActorSnapshot(
 
     /** Attachment forward from the gameplay attachment reference. */
     public Vec3 attachmentForward() {
-        return axisToMinecraft(attachmentFrame.axisZ(new Vector3d()));
+        return MinecraftMathAdapter.toMinecraft(
+                attachmentFrame.axisZ()
+        );
     }
 
     /** Semantic view forward; not an alias of attachment forward or reference. */
     public Vec3 viewForward() {
-        return look.forward();
+        return MinecraftMathAdapter.toMinecraft(look.forward());
     }
 
     /** Semantic view up; not an alias of attachment up or reference up. */
     public Vec3 viewUp() {
-        return look.up();
+        return MinecraftMathAdapter.toMinecraft(look.up());
     }
 
     /**
@@ -123,7 +131,7 @@ public record VanillaActorSnapshot(
 
     /** Zero-pitch semantic heading used by movement and world-carrier fallbacks. */
     public Vec3 zeroPitchHeading() {
-        return look.zeroPitchForward();
+        return MinecraftMathAdapter.toMinecraft(look.zeroPitchForward());
     }
 
     /**
@@ -138,7 +146,7 @@ public record VanillaActorSnapshot(
                     "ordinary Vanilla actor has no independent exact body");
         }
         return cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry.characterBodyAtCenter(
-                width, height, center, referenceFrame.up());
+                width, height, center, attachmentFrame.axisY());
     }
 
     private static void requireFinite(Vec3 value, String name) {
@@ -155,7 +163,4 @@ public record VanillaActorSnapshot(
         }
     }
 
-    private static Vec3 axisToMinecraft(Vector3d axis) {
-        return new Vec3(axis.x, axis.y, axis.z);
-    }
 }

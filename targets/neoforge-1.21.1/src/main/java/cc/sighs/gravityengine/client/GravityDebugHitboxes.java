@@ -1,10 +1,10 @@
 package cc.sighs.gravityengine.client;
 
 import cc.sighs.gravityengine.ClientConfig;
-import cc.sighs.gravityengine.gravity.collision.MinecraftGeometryAdapter;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CharacterCapsule;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CollisionBody;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.OrientedBox;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Minecraft;
@@ -67,9 +67,9 @@ public final class GravityDebugHitboxes {
                 drawEdge(
                         poseStack,
                         vertices,
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 physicalBody.center()),
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 presentationBody.center()),
                         CENTER_DISTANCE
                 );
@@ -129,51 +129,51 @@ public final class GravityDebugHitboxes {
             float[] color
     ) {
         final int segments = 16;
-        Vec3 up = MinecraftGeometryAdapter.toMinecraft(capsule.axis());
+        Vec3 up = MinecraftMathAdapter.toMinecraft(capsule.axis());
         Vec3 seed = Math.abs(up.x) < 0.75D
                 ? new Vec3(1.0D, 0.0D, 0.0D)
                 : new Vec3(0.0D, 1.0D, 0.0D);
         Vec3 right = up.cross(seed).normalize();
         Vec3 forward = up.cross(right).normalize();
         renderCircle(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.a()), right, forward,
+                MinecraftMathAdapter.toMinecraft(capsule.a()), right, forward,
                 capsule.radius(), segments, color);
         renderCircle(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.b()), right, forward,
+                MinecraftMathAdapter.toMinecraft(capsule.b()), right, forward,
                 capsule.radius(), segments, color);
 
         drawEdge(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.a())
+                MinecraftMathAdapter.toMinecraft(capsule.a())
                         .add(right.scale(capsule.radius())),
-                MinecraftGeometryAdapter.toMinecraft(capsule.b())
+                MinecraftMathAdapter.toMinecraft(capsule.b())
                         .add(right.scale(capsule.radius())), color);
         drawEdge(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.a())
+                MinecraftMathAdapter.toMinecraft(capsule.a())
                         .subtract(right.scale(capsule.radius())),
-                MinecraftGeometryAdapter.toMinecraft(capsule.b())
+                MinecraftMathAdapter.toMinecraft(capsule.b())
                         .subtract(right.scale(capsule.radius())), color);
         drawEdge(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.a())
+                MinecraftMathAdapter.toMinecraft(capsule.a())
                         .add(forward.scale(capsule.radius())),
-                MinecraftGeometryAdapter.toMinecraft(capsule.b())
+                MinecraftMathAdapter.toMinecraft(capsule.b())
                         .add(forward.scale(capsule.radius())), color);
         drawEdge(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.a())
+                MinecraftMathAdapter.toMinecraft(capsule.a())
                         .subtract(forward.scale(capsule.radius())),
-                MinecraftGeometryAdapter.toMinecraft(capsule.b())
+                MinecraftMathAdapter.toMinecraft(capsule.b())
                         .subtract(forward.scale(capsule.radius())), color);
 
         renderCapArc(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.a()), right, up.reverse(),
+                MinecraftMathAdapter.toMinecraft(capsule.a()), right, up.reverse(),
                 capsule.radius(), segments / 2, color);
         renderCapArc(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.a()), forward, up.reverse(),
+                MinecraftMathAdapter.toMinecraft(capsule.a()), forward, up.reverse(),
                 capsule.radius(), segments / 2, color);
         renderCapArc(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.b()), right, up,
+                MinecraftMathAdapter.toMinecraft(capsule.b()), right, up,
                 capsule.radius(), segments / 2, color);
         renderCapArc(poseStack, vertices,
-                MinecraftGeometryAdapter.toMinecraft(capsule.b()), forward, up,
+                MinecraftMathAdapter.toMinecraft(capsule.b()), forward, up,
                 capsule.radius(), segments / 2, color);
     }
 
@@ -231,9 +231,9 @@ public final class GravityDebugHitboxes {
                 drawEdge(
                         poseStack,
                         vertices,
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 box.corner(-1, y, z)),
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 box.corner(1, y, z)),
                         color);
             }
@@ -243,9 +243,9 @@ public final class GravityDebugHitboxes {
                 drawEdge(
                         poseStack,
                         vertices,
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 box.corner(x, -1, z)),
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 box.corner(x, 1, z)),
                         color);
             }
@@ -255,9 +255,9 @@ public final class GravityDebugHitboxes {
                 drawEdge(
                         poseStack,
                         vertices,
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 box.corner(x, y, -1)),
-                        MinecraftGeometryAdapter.toMinecraft(
+                        MinecraftMathAdapter.toMinecraft(
                                 box.corner(x, y, 1)),
                         color);
             }

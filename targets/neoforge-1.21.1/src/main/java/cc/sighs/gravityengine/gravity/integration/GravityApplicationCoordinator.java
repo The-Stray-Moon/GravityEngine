@@ -1,39 +1,47 @@
 package cc.sighs.gravityengine.gravity.integration;
 
-import cc.sighs.gravityengine.gravity.assignment.GravityAssignmentService;
-import cc.sighs.gravityengine.gravity.collision.*;
-import cc.sighs.gravityengine.gravity.component.EntityGravityComponent.PendingTarget;
-import cc.sighs.gravityengine.gravity.component.EntityGravityComponent.SnapshotAcceptance;
-import cc.sighs.gravityengine.gravity.component.EntityGravityComponent;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.GravityState;
-import cc.sighs.gravityengine.gravity.integration.geometry.GravityGeometryTransitionService;
+import cc.sighs.gravityengine.gravity.assignment.GravityAssignmentService;
+import cc.sighs.gravityengine.gravity.component.EntityGravityComponent;
+import cc.sighs.gravityengine.gravity.geometry.GeometryTransitionResult;
+import cc.sighs.gravityengine.gravity.geometry.GeometryTransitionStatus;
 import cc.sighs.gravityengine.gravity.integration.geometry.GravityApplicationBarrier;
+import cc.sighs.gravityengine.gravity.integration.geometry.GravityGeometryTransitionService;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
-import cc.sighs.gravityengine.gravity.model.*;
+import cc.sighs.gravityengine.gravity.model.CommittedGravityApplication;
+import cc.sighs.gravityengine.gravity.model.GravityApplicationPlan;
+import cc.sighs.gravityengine.gravity.model.GravityAuthorityMode;
+import cc.sighs.gravityengine.gravity.model.GravityEntityCapabilities;
+import cc.sighs.gravityengine.gravity.model.GravityEntityState.PendingTarget;
+import cc.sighs.gravityengine.gravity.model.GravityEntityState.SnapshotAcceptance;
+import cc.sighs.gravityengine.gravity.model.GravitySuppressionReason;
 import cc.sighs.gravityengine.gravity.policy.GravityApplicationPlanner;
 import cc.sighs.gravityengine.gravity.policy.GravityEntityCapabilitiesPolicy;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
-import cc.sighs.gravityengine.gravity.runtime.GravityRuntimeState;
+import cc.sighs.gravityengine.gravity.runtime.GravityOperationState;
 import cc.sighs.gravityengine.network.GravitySyncService;
 import com.mojang.logging.LogUtils;
-import java.util.Objects;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
+import java.util.Objects;
+
 /**
  * Authoritative gravity-application transition coordinator.
  *
- * <p>Owns the one application-selection entry: entity-kind capabilities and
- * the immutable entity-state snapshot feed the pure planner, the resulting
- * geometry transition is executed exactly once, and any transition that cannot
- * run under the current movement/geometry scope is deferred rather than
- * partially applied.</p>
+ * <p>Owns the authoritative application-selection entry: entity-kind
+ * capabilities and the immutable entity-state snapshot feed the pure planner,
+ * the resulting geometry transition is executed exactly once, and any
+ * transition that cannot run under the current movement/geometry scope is
+ * deferred rather than partially applied. Client non-player replicas use the
+ * explicit {@link #applyRemoteApplication(Entity, CommittedGravityApplication, long)}
+ * path, preserving the server plan and epoch through deferred installation.</p>
  */
 public final class GravityApplicationCoordinator {
     private GravityApplicationCoordinator() {}
@@ -41,10 +49,10 @@ public final class GravityApplicationCoordinator {
     /** Server-side consolidated influence reconciliation and synchronization. */
     public static void reconcileServerInfluence(ServerPlayer player) {
         var component = GravityEntityAccess.cast(player).gravityengine$gravityComponent();
-        long before = component.influenceRevision();
+        long before = component.state().influenceRevision();
         updateAuthoritativeSuppression(player);
         updateBody(player);
-        if (component.influenceRevision() != before) {
+        if (component.state().influenceRevision() != before) {
             GravitySyncService.syncTracking(player);
         }
     }
@@ -60,11 +68,10 @@ public final class GravityApplicationCoordinator {
             boolean geometryChanged
     ) {}
 
-    /** Client snapshot acceptance plus the one derived application transition. */
+    /** Replicated assignment/suppression acceptance. No application decision is derived here. */
     public record RemoteSnapshotResult(
             boolean assignmentAccepted,
-            boolean influenceAccepted,
-            ApplicationTransitionResult application
+            boolean influenceAccepted
     ) {}
 
     /** Pure geometry transition plan derived from previous and desired body mode. */
@@ -101,26 +108,38 @@ public final class GravityApplicationCoordinator {
             boolean fieldPresent,
             boolean rejectWhileDirect
     ) {
+        requireAuthoritativeMutationSide(entity);
         var component = component(entity);
-        if (rejectWhileDirect && component.assignedAuthority() == GravityAuthorityMode.DIRECT) {
+        if (rejectWhileDirect && component.state().assignedAuthority() == GravityAuthorityMode.DIRECT) {
             return unchanged(false);
         }
-        boolean accepted = component.setAssigned(next, authority, fieldPresent);
+        boolean hadReference = component.state().hasActiveGravityReference();
+        boolean accepted = component.state().setAssigned(next, authority, fieldPresent);
         if (!accepted) {
             return unchanged(false);
         }
-        return buildAndApply(
+        /*
+         * NeoForge persists only attachment instances present on the holder, so
+         * a durable mutation must materialize the slot before the next save.
+         */
+        cc.sighs.gravityengine.gravity.persistence.GravityPersistence
+                .materialize(entity);
+        ApplicationTransitionResult result = buildAndApply(
                 entity,
-                new PendingTarget(component.assignedState(), component.effectiveSuppression()),
-                true
+                new PendingTarget(component.state().assignedState(), component.state().authoritativeSuppression()),
+                true,
+                false,
+                false
         );
+        clearLostReferenceContinuity(component, hadReference);
+        return result;
     }
 
     public static RemoteSnapshotResult applyRemoteSnapshot(
             Entity entity,
             GravityState assignment,
             GravityAuthorityMode authority,
-            boolean fieldPresent,
+            cc.sighs.gravityengine.api.FieldPresence fieldPresence,
             long assignmentRevision,
             GravitySuppressionReason suppression,
             long suppressionRevision
@@ -140,77 +159,116 @@ public final class GravityApplicationCoordinator {
         }
 
         var component = component(entity);
-        CommittedGravityApplication previousApplication = component.committedApplication();
+        boolean hadReference = component.state().hasActiveGravityReference();
 
-        SnapshotAcceptance assignmentAcceptance = component.acceptRemoteAssignment(
-                assignment, authority, fieldPresent, assignmentRevision);
-        SnapshotAcceptance suppressionAcceptance = component.acceptRemoteSuppression(
+        SnapshotAcceptance assignmentAcceptance = component.state().acceptRemoteAssignment(
+                assignment, authority, fieldPresence, assignmentRevision);
+        SnapshotAcceptance suppressionAcceptance = component.state().acceptRemoteSuppression(
                 suppression, suppressionRevision);
 
-        if (assignmentAcceptance == SnapshotAcceptance.STALE
-                && suppressionAcceptance == SnapshotAcceptance.STALE) {
-            GravityApplicationPlan desired = desiredPlan(entity, component);
-            if (desired.equals(previousApplication.plan())
-                    && component.assignedState().sameSyncData(previousApplication.appliedState())) {
-                return new RemoteSnapshotResult(
-                        false,
-                        false,
-                        new ApplicationTransitionResult(
-                                TransitionStatus.UNCHANGED, false, false)
-                );
-            }
+        /*
+         * A conflicting equal-revision snapshot changes nothing. The domain
+         * state reports the conflict and this Minecraft-facing network caller
+         * owns the diagnostic.
+         */
+        if (assignmentAcceptance == SnapshotAcceptance.CONFLICT) {
+            LOGGER.warn(
+                    "Assignment snapshot conflict: revision={} "
+                            + "existingDown={} incomingDown={} "
+                            + "existingAuthority={} incomingAuthority={} "
+                            + "existingFieldPresent={} incomingFieldPresent={}",
+                    assignmentRevision,
+                    component.state().assignedState().down(),
+                    assignment.down(),
+                    component.state().assignedAuthority(),
+                    authority,
+                    component.state().assignedFieldPresent(),
+                    fieldPresence
+            );
         }
 
-        ApplicationTransitionResult application = buildAndApply(
-                entity,
-                new PendingTarget(component.assignedState(), component.effectiveSuppression()),
-                assignmentAcceptance == SnapshotAcceptance.ACCEPTED
-        );
+        if (suppressionAcceptance == SnapshotAcceptance.CONFLICT) {
+            LOGGER.warn(
+                    "Suppression snapshot conflict: revision={} "
+                            + "existing={} incoming={}",
+                    suppressionRevision,
+                    component.state().authoritativeSuppression(),
+                    suppression
+            );
+        }
+
+        clearLostReferenceContinuity(component, hadReference);
 
         return new RemoteSnapshotResult(
                 assignmentAcceptance == SnapshotAcceptance.ACCEPTED,
-                suppressionAcceptance == SnapshotAcceptance.ACCEPTED,
-                application
+                suppressionAcceptance == SnapshotAcceptance.ACCEPTED
         );
+    }
+
+    /**
+     * A genuinely disappearing environmental reference is a reference
+     * discontinuity, not an application, routing or collider event: no
+     * presentation basis may outlive the reference it was derived from. An
+     * application fallback that keeps the reference (for example the Vanilla
+     * body while the entity is still inside a field) is not a loss and clears
+     * nothing here.
+     */
+    private static void clearLostReferenceContinuity(
+            EntityGravityComponent component,
+            boolean hadReference
+    ) {
+        if (hadReference && !component.state().hasActiveGravityReference()) {
+            component.operationState().clearFrameContinuity();
+        }
     }
 
     public static ApplicationTransitionResult updateAuthoritativeSuppression(Entity entity) {
+        requireAuthoritativeMutationSide(entity);
         var component = component(entity);
         GravitySuppressionReason next =
                 GravityInfluencePolicy.deriveAuthoritativeSuppression(entity);
-        if (!component.setAuthoritativeSuppression(next)) {
+        if (!component.state().setAuthoritativeSuppression(next)) {
             return unchanged(false);
         }
         return buildAndApply(
                 entity,
-                new PendingTarget(component.assignedState(), component.effectiveSuppression()),
-                true
-        );
-    }
-
-    public static ApplicationTransitionResult updateLocalAbilitySuppression(Player player) {
-        var component = component(player);
-        GravitySuppressionReason next = player.isCreative() && player.getAbilities().flying
-                ? GravitySuppressionReason.CREATIVE_FLIGHT
-                : GravitySuppressionReason.NONE;
-        if (next == component.localClientSuppression()) {
-            return unchanged(false);
-        }
-        component.setLocalClientSuppression(next);
-        return buildAndApply(
-                player,
-                new PendingTarget(component.assignedState(), component.effectiveSuppression()),
+                new PendingTarget(component.state().assignedState(), component.state().authoritativeSuppression()),
+                true,
+                false,
                 false
         );
     }
 
+    /** Server-authoritative application transition from the current committed inputs. */
     public static ApplicationTransitionResult updateBody(Entity entity) {
+        requireAuthoritativeMutationSide(entity);
+        MovementModeIntegration.update(entity);
         var component = component(entity);
         return buildAndApply(
                 entity,
-                new PendingTarget(component.assignedState(), component.effectiveSuppression()),
+                new PendingTarget(component.state().assignedState(), component.state().authoritativeSuppression()),
+                false,
+                false,
                 false
         );
+    }
+
+    /**
+     * Retries a deferred server application for a live non-player replica.
+     * Assignment and local source discovery never select the replica plan.
+     */
+    public static ApplicationTransitionResult updateReplicaBody(Entity entity) {
+        Objects.requireNonNull(entity, "entity");
+        if (!entity.level().isClientSide()) {
+            throw new IllegalStateException(
+                    "replica application derivation is client-only");
+        }
+        if (entity instanceof Player) {
+            throw new IllegalStateException(
+                    "player application must be installed from the server body commit stream");
+        }
+        applyPending(entity);
+        return unchanged(false);
     }
 
     /**
@@ -227,10 +285,13 @@ public final class GravityApplicationCoordinator {
      */
     public static ApplicationTransitionResult bootstrapLoadedApplication(Entity entity) {
         Objects.requireNonNull(entity, "entity");
+        requireAuthoritativeMutationSide(entity);
         EntityGravityComponent component = component(entity);
         return buildAndApply(
                 entity,
-                new PendingTarget(component.assignedState(), component.effectiveSuppression()),
+                new PendingTarget(component.state().assignedState(), component.state().authoritativeSuppression()),
+                false,
+                false,
                 false
         );
     }
@@ -241,38 +302,52 @@ public final class GravityApplicationCoordinator {
      */
     public static void refreshLoadedInputs(Entity entity) {
         Objects.requireNonNull(entity, "entity");
+        requireAuthoritativeMutationSide(entity);
         EntityGravityComponent component = component(entity);
 
         // A retry always rebuilds its derived target from current authoritative
         // inputs. Never allow a deferred target from an earlier attempt to commit
         // after the fresh load snapshot.
-        component.takePending();
+        component.state().takePending();
 
-        if (component.assignedAuthority() == GravityAuthorityMode.FIELD) {
+        if (component.state().assignedAuthority() == GravityAuthorityMode.FIELD) {
             GravityAssignmentService.AssignmentResult field =
                     GravityAssignmentService.evaluate(entity);
-            component.setAssigned(
-                    field.resolved(), GravityAuthorityMode.FIELD, field.fieldPresent());
+            if (component.state().commitFieldEvaluation(field.resolved(), field.fieldPresent(),
+                    field.fieldEvaluation().coverage()) && field.authoritative()) {
+                cc.sighs.gravityengine.gravity.persistence.GravityPersistence.materialize(entity);
+            }
         }
 
-        component.setAuthoritativeSuppression(
+        component.state().setAuthoritativeSuppression(
                 GravityInfluencePolicy.deriveAuthoritativeSuppression(entity));
     }
 
     public static void applyPending(Entity entity) {
         var component = component(entity);
-        var runtime = component.runtime();
+        var runtime = component.operationState();
         if (runtime.isInMove()
                 || runtime.isApplyingGeometry()
                 || GravityApplicationBarrier.isHeld(entity)) {
             return;
         }
-        if (component.takePending() == null) {
+        PendingTarget pending = component.state().takePending();
+        if (pending == null) {
+            return;
+        }
+        if (entity.level().isClientSide()) {
+            if (!(entity instanceof Player) && pending.remotePlan() != null) {
+                applyRemoteApplication(entity, new CommittedGravityApplication(
+                        pending.desiredAssignment(), pending.desiredEffectiveSuppression(),
+                        pending.remotePlan()), pending.remoteEpoch());
+            }
             return;
         }
         buildAndApply(
                 entity,
-                new PendingTarget(component.assignedState(), component.effectiveSuppression()),
+                new PendingTarget(component.state().assignedState(), component.state().authoritativeSuppression()),
+                false,
+                false,
                 false
         );
     }
@@ -280,19 +355,43 @@ public final class GravityApplicationCoordinator {
     private static ApplicationTransitionResult buildAndApply(
             Entity entity,
             PendingTarget target,
-            boolean assignmentAccepted
+            boolean assignmentAccepted,
+            boolean retainOnlyIfAbsent,
+            boolean replica
     ) {
-        return buildAndApply(entity, target, assignmentAccepted, false);
+        return buildAndApply(entity, target, assignmentAccepted, retainOnlyIfAbsent, replica, null, 0);
     }
 
-    private static ApplicationTransitionResult buildAndApply(
-            Entity entity,
-            PendingTarget target,
-            boolean assignmentAccepted,
-            boolean retainOnlyIfAbsent
-    ) {
+    public static ApplicationTransitionResult applyRemoteApplication(Entity entity,
+            CommittedGravityApplication application, long epoch) {
+        var state = component(entity).state();
+        PendingTarget pending = state.pendingApplication();
+        if (pending != null && pending.remotePlan() != null && pending.remoteEpoch() >= epoch) {
+            return unchanged(false);
+        }
+        if (state.classifyRemoteApplication(application, epoch)
+                != cc.sighs.gravityengine.gravity.model.GravityEntityState.RemoteApplicationAcceptance.ACCEPTED) {
+            return unchanged(false);
+        }
+        state.takePending();
+        return buildAndApply(entity, new PendingTarget(application.appliedState(), application.authoritativeSuppression(),
+                        application.plan(), epoch),
+                false, false, true, application, epoch);
+    }
+
+    private static ApplicationTransitionResult buildAndApply(Entity entity, PendingTarget target,
+            boolean assignmentAccepted, boolean retainOnlyIfAbsent, boolean replica,
+            CommittedGravityApplication remoteApplication, long remoteEpoch) {
+        if (replica) {
+            if (!entity.level().isClientSide() || entity instanceof Player) {
+                throw new IllegalStateException(
+                        "replica application install requires a client non-player entity");
+            }
+        } else {
+            requireAuthoritativeMutationSide(entity);
+        }
         var component = component(entity);
-        var runtime = component.runtime();
+        var runtime = component.operationState();
         if (runtime.isInMove()
                 || runtime.isApplyingGeometry()
                 || GravityApplicationBarrier.isHeld(entity)) {
@@ -301,16 +400,15 @@ public final class GravityApplicationCoordinator {
                     TransitionStatus.DEFERRED, assignmentAccepted, false);
         }
 
-        CommittedGravityApplication previous = component.committedApplication();
-        GravityApplicationPlan desired = desiredPlan(entity, component);
+        CommittedGravityApplication previous = component.state().committedApplication();
+        GravityApplicationPlan desired = replica ? Objects.requireNonNull(remoteApplication).plan() : desiredPlan(entity, component);
 
         ApplicationGeometryPlan plan = planGeometry(previous.plan(), desired);
-        if (plan != ApplicationGeometryPlan.NONE
-                && !cc.sighs.gravityengine.gravity.integration.geometry.PlayerBodyHandoff.mayChangeBody(entity)) {
+        if (!cc.sighs.gravityengine.gravity.integration.geometry.PlayerBodyHandoff.mayChangeBody(entity)) {
             enqueueDeferred(component, target, retainOnlyIfAbsent);
             return new ApplicationTransitionResult(TransitionStatus.DEFERRED, assignmentAccepted, false);
         }
-        if (plan != ApplicationGeometryPlan.NONE) {
+        if (!replica && plan != ApplicationGeometryPlan.NONE) {
             CommittedGravityApplication next = new CommittedGravityApplication(
                     target.desiredAssignment(), target.desiredEffectiveSuppression(), desired);
             if (cc.sighs.gravityengine.gravity.integration.geometry.NativeAabbApplicationCommit
@@ -323,12 +421,12 @@ public final class GravityApplicationCoordinator {
             CommittedGravityApplication next = new CommittedGravityApplication(
                     target.desiredAssignment(), target.desiredEffectiveSuppression(), desired);
             boolean changed = !previous.equals(next);
-            if (changed) {
-                component.commitApplication(next);
+            if (changed || replica) {
+                commitApplication(component, next, replica, remoteEpoch);
             }
             if (changed
                     && !desired.usesCustomBody() && previous.plan().usesCustomBody()) {
-                runtime.clearInfluenceTransientState();
+                runtime.clearMovementTransientState();
                 cleanupVanillaTransition(entity, runtime);
             }
             return new ApplicationTransitionResult(
@@ -341,28 +439,21 @@ public final class GravityApplicationCoordinator {
         Vec3 savedPosition = entity.position();
         AABB savedBox = entity.getBoundingBox();
         Vec3 savedVelocity = entity.getDeltaMovement();
-        GravityFrame savedInstalledFrame = runtime.geometryReferenceFrame();
+        var savedInstalledUp = runtime.installedCollisionUp();
 
-        GravityGeometryTransitionService.Result geo;
+        GeometryTransitionResult geo;
         try {
             geo = executePlan(entity, plan, target.desiredAssignment());
-        } catch (Exception failure) {
-            rollbackEntity(entity, savedPosition, savedBox, savedVelocity, savedInstalledFrame);
+        } catch (cc.sighs.gravityengine.gravity.collision.CollisionComplexityLimitException
+                | cc.sighs.gravityengine.gravity.collision.CollisionSceneCoverageException unavailable) {
+            rollbackEntity(entity, savedPosition, savedBox, savedVelocity, savedInstalledUp);
             enqueueDeferred(component, target, retainOnlyIfAbsent);
-            LOGGER.error(
-                    "Gravity geometry transition threw: entityId={} uuid={} dimension={} geometryPlan={} previousPlan={} desiredPlan={} desiredDown={} desiredStrength={}",
-                    entity.getId(),
-                    entity.getUUID(),
-                    entity.level().dimension().location(),
-                    plan,
-                    previous.plan(),
-                    desired,
-                    target.desiredAssignment().down(),
-                    target.desiredAssignment().strength(),
-                    failure
-            );
-            return new ApplicationTransitionResult(
-                    TransitionStatus.FAILED, assignmentAccepted, false);
+            cc.sighs.gravityengine.gravity.debug.CollisionCoverageDiagnostics.report(entity, unavailable);
+            return new ApplicationTransitionResult(TransitionStatus.FAILED, assignmentAccepted, false);
+        } catch (RuntimeException | Error failure) {
+            try { rollbackEntity(entity, savedPosition, savedBox, savedVelocity, savedInstalledUp); }
+            catch (RuntimeException | Error rollback) { if (rollback != failure) failure.addSuppressed(rollback); }
+            throw failure;
         }
 
         if (isSuccessfulGeometryStatus(geo.status())) {
@@ -377,15 +468,15 @@ public final class GravityApplicationCoordinator {
                 cleanupVanillaTransition(entity, runtime);
             }
 
-            component.commitApplication(next);
+            commitApplication(component, next, replica, remoteEpoch);
             return new ApplicationTransitionResult(
                     TransitionStatus.COMMITTED, assignmentAccepted, geometryChanged);
-        } else if (geo.status() == GravityGeometryTransitionService.Status.DEFERRED) {
+        } else if (geo.status() == GeometryTransitionStatus.DEFERRED) {
             enqueueDeferred(component, target, retainOnlyIfAbsent);
             return new ApplicationTransitionResult(
                     TransitionStatus.DEFERRED, assignmentAccepted, false);
         } else {
-            rollbackEntity(entity, savedPosition, savedBox, savedVelocity, savedInstalledFrame);
+            rollbackEntity(entity, savedPosition, savedBox, savedVelocity, savedInstalledUp);
             enqueueDeferred(component, target, retainOnlyIfAbsent);
             return new ApplicationTransitionResult(
                     TransitionStatus.FAILED, assignmentAccepted, false);
@@ -408,13 +499,13 @@ public final class GravityApplicationCoordinator {
         return ApplicationGeometryPlan.NONE;
     }
 
-    private static GravityGeometryTransitionService.Result executePlan(
+    private static GeometryTransitionResult executePlan(
             Entity entity,
             ApplicationGeometryPlan plan,
             GravityState state
     ) {
         return switch (plan) {
-            case NONE -> GravityGeometryTransitionService.Result.UNCHANGED;
+            case NONE -> GeometryTransitionResult.UNCHANGED;
             case VANILLA_TO_CUSTOM ->
                     GravityGeometryTransitionService.installCustomFromPositionAnchor(entity, state);
             case CUSTOM_TO_VANILLA -> GravityGeometryTransitionService.installVanilla(entity);
@@ -423,15 +514,15 @@ public final class GravityApplicationCoordinator {
 
     private static void postTransitionCleanup(
             Entity entity,
-            GravityRuntimeState runtime,
+            GravityOperationState runtime,
             ApplicationGeometryPlan plan
     ) {
         if (plan == ApplicationGeometryPlan.NONE) return;
-        runtime.clearInfluenceTransientState();
+        runtime.clearMovementTransientState();
         entity.setOnGround(false);
     }
 
-    private static void cleanupVanillaTransition(Entity entity, GravityRuntimeState runtime) {
+    private static void cleanupVanillaTransition(Entity entity, GravityOperationState runtime) {
         entity.fallDistance = 0f;
         entity.setOnGround(false);
         runtime.clearCurrentMoveResult();
@@ -443,18 +534,18 @@ public final class GravityApplicationCoordinator {
             Vec3 position,
             AABB box,
             Vec3 velocity,
-            GravityFrame installedFrame
+            cc.sighs.gravityengine.api.math.Vec3d installedUp
     ) {
-        GravityEntityGeometry.restoreGeometry(entity, position, box, installedFrame);
+        GravityEntityGeometry.restoreGeometry(entity, position, box, installedUp);
         entity.setDeltaMovement(velocity);
     }
 
     private static boolean isSuccessfulGeometryStatus(
-            GravityGeometryTransitionService.Status status
+            GeometryTransitionStatus status
     ) {
-        return status == GravityGeometryTransitionService.Status.APPLIED
-                || status == GravityGeometryTransitionService.Status.RECOVERED
-                || status == GravityGeometryTransitionService.Status.UNCHANGED;
+        return status == GeometryTransitionStatus.APPLIED
+                || status == GeometryTransitionStatus.RECOVERED
+                || status == GeometryTransitionStatus.UNCHANGED;
     }
 
     private static void enqueueDeferred(
@@ -463,9 +554,9 @@ public final class GravityApplicationCoordinator {
             boolean retainOnlyIfAbsent
     ) {
         if (retainOnlyIfAbsent) {
-            component.enqueueIfAbsent(target);
+            component.state().enqueueIfAbsent(target);
         } else {
-            component.enqueueOrReplace(target);
+            component.state().enqueueOrReplace(target);
         }
     }
 
@@ -480,11 +571,15 @@ public final class GravityApplicationCoordinator {
     ) {
         Objects.requireNonNull(entity, "entity");
         Objects.requireNonNull(component, "component");
-        GravityAuthorityMode authority = component.assignedAuthority();
+        GravityAuthorityMode authority = component.state().assignedAuthority();
         boolean hasExplicitState = authority == GravityAuthorityMode.DIRECT;
+        // A durable FIELD seed may request safe continuity installation while
+        // live presence stays UNKNOWN. The geometry owner commits or rejects it.
         boolean hasActiveField = authority == GravityAuthorityMode.FIELD
-                && component.assignedFieldPresent();
-        boolean suppressed = component.effectiveSuppression()
+                && (component.state().fieldReferenceInForce()
+                || component.state().fieldEvidenceUnknown()
+                && component.state().durableFieldContinuity() == cc.sighs.gravityengine.gravity.model.GravityEntityState.FieldContinuity.SEED);
+        boolean suppressed = component.state().authoritativeSuppression()
                 != GravitySuppressionReason.NONE;
         return GravityApplicationPlanner.plan(
                 GravityEntityCapabilitiesPolicy.capabilities(entity),
@@ -507,5 +602,31 @@ public final class GravityApplicationCoordinator {
 
     private static EntityGravityComponent component(Entity entity) {
         return GravityEntityAccess.cast(entity).gravityengine$gravityComponent();
+    }
+
+    private static void commitApplication(
+            EntityGravityComponent component,
+            CommittedGravityApplication application,
+            boolean replica, long remoteEpoch
+    ) {
+        if (replica) {
+            component.state().acceptRemoteApplication(application, remoteEpoch);
+        } else {
+            if (component.state().commitAuthoritativeApplication(application)) {
+                if (component.entity() instanceof ServerPlayer player) {
+                    cc.sighs.gravityengine.gravity.integration.geometry.PlayerBodyHandoff.markApplicationChanged(player);
+                } else {
+                    GravitySyncService.syncTracking(component.entity());
+                }
+            }
+        }
+    }
+
+    private static void requireAuthoritativeMutationSide(Entity entity) {
+        Objects.requireNonNull(entity, "entity");
+        if (entity.level().isClientSide()) {
+            throw new IllegalStateException(
+                    "authoritative gravity application mutation is server-owned");
+        }
     }
 }

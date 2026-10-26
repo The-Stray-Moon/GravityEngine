@@ -1,9 +1,11 @@
 package cc.sighs.gravityengine.gravity.integration;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.gravity.kinematic.KinematicMoveRequest;
 import cc.sighs.gravityengine.gravity.kinematic.MovementEvidence;
 import cc.sighs.gravityengine.gravity.kinematic.OwnedMotion;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -38,7 +40,7 @@ public final class MovementProvenanceIntegration {
 
         var runtime =
                 GravityEntityAccess.cast(entity)
-                        .gravityengine$gravityComponent().runtime();
+                        .gravityengine$gravityComponent().operationState();
 
         OwnedMotion evidence =
                 runtime.consumeMovementEvidence(
@@ -57,7 +59,7 @@ public final class MovementProvenanceIntegration {
 
         return MovementEvidence.capture(
                 channelFor(type),
-                wrapper,
+                MinecraftMathAdapter.toVec3d(wrapper),
                 evidence
         );
     }
@@ -83,12 +85,14 @@ public final class MovementProvenanceIntegration {
             return vanillaDisplacement;
         }
 
-        return GravityEntityAccess.cast(entity)
-                .gravityengine$gravityComponent()
-                .runtime()
-                .lastCommittedLocomotionDisplacement(
-                        entity.level().getGameTime())
-                .orElse(Vec3.ZERO);
+        return MinecraftMathAdapter.toMinecraft(
+                GravityEntityAccess.cast(entity)
+                        .gravityengine$gravityComponent()
+                        .operationState()
+                        .lastCommittedLocomotionDisplacement(
+                                entity.level().getGameTime())
+                        .orElse(Vec3d.ZERO)
+        );
     }
 
     /**
@@ -134,10 +138,12 @@ public final class MovementProvenanceIntegration {
         }
 
         GravityEntityAccess.cast(entity)
-                .gravityengine$gravityComponent().runtime()
+                .gravityengine$gravityComponent().operationState()
                 .recordExternalPush(
                         entity.level().getGameTime(),
-                        acceptedExternalDelta
+                        MinecraftMathAdapter.toVec3d(
+                                acceptedExternalDelta
+                        )
                 );
     }
 

@@ -3,19 +3,15 @@ package cc.sighs.gravityengine.gravity.debug;
 import net.minecraft.world.entity.Entity;
 
 import javax.annotation.Nullable;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
- * Non-fatal reporting channel for diagnostic gravity invariants.
+ * Correctness telemetry, not debug tracing. Independent of debug domains and filters.
  *
  * <p>A diagnostic invariant describes a state the kernel did not expect but
  * which the surrounding runtime can still resolve deterministically. Such an
- * invariant must never alter authoritative movement: enabling
- * {@code gravityengine.debugGravity} may add warnings, but it may not change
- * physics or geometry state. Throwing here would abandon an in-flight
- * GravityEngine operation, so these conditions report instead.</p>
+ * invariant reports a warning even with all debug flags disabled. Only the
+ * explicit fail-on-invariant test mode throws and abandons the operation.</p>
  *
  * <p>Genuine kernel contracts whose violation would corrupt state stay fatal in
  * their own call sites, independently of any debug flag.</p>
@@ -30,13 +26,14 @@ public final class GravityInvariant {
      * enabled by ordinary client or server runs.
      */
     public static final boolean THROW_ON_VIOLATION =
-            Boolean.getBoolean("gravityengine.failOnGravityInvariant");
+            BootDebugOptions.failOnGravityInvariant();
 
     /** Minimum gap between reports of one invariant for one entity. */
     private static final long REPEAT_SUPPRESSION_MILLIS = 10_000L;
 
     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
-    private static final Map<String, Long> LAST_REPORT_MILLIS = new ConcurrentHashMap<>();
+    private static final InvariantRateLimiter REPORTS = new InvariantRateLimiter(
+            1024, REPEAT_SUPPRESSION_MILLIS * 1_000_000L);
 
     private GravityInvariant() {}
 
@@ -75,14 +72,9 @@ public final class GravityInvariant {
     }
 
     private static boolean shouldReport(String id, @Nullable Entity entity) {
-        String key = entity == null ? id : id + "#" + entity.getId();
-        long now = System.currentTimeMillis();
-        Long previous = LAST_REPORT_MILLIS.get(key);
-        if (previous != null && now - previous < REPEAT_SUPPRESSION_MILLIS) {
-            return false;
-        }
-        LAST_REPORT_MILLIS.put(key, now);
-        return true;
+        String key = entity == null ? id : id + "#" + entity.getUUID()
+                + "#" + entity.level().isClientSide();
+        return REPORTS.acquire(key, System.nanoTime());
     }
 
     private static String label(Entity entity) {

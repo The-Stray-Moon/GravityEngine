@@ -1,27 +1,23 @@
 package cc.sighs.gravityengine.gravity.kinematic.geometry;
 
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /**
  * Immutable generic oriented box.
  *
  * <p>Owns only geometry data (center, half extents and one generic
- * {@link cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d} orientation) and pure kinematic operations.
- * Minecraft conversion helpers live in the collision-facing
- * {@code MinecraftGeometryAdapter}; gravity frames are not part of this
- * type.  Local axis signs are generic geometry convention and carry no
- * gravity right/up/forward meaning.</p>
+ * {@link cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d} orientation)
+ * and pure kinematic operations. Minecraft collision conversion helpers live
+ * in the collision-facing {@code MinecraftCollisionGeometryAdapter}; gravity
+ * frames are not part of this type. Local axis signs are generic geometry
+ * convention and carry no gravity right/up/forward meaning.</p>
  *
- * <p>All vector components are defensively copied on construction and every
- * accessor returns a fresh mutable copy so callers may safely use JOML's
- * mutating vector API without corrupting this immutable body.</p>
+ * <p>All vector components are immutable GravityEngine values.</p>
  */
 public record OrientedBox(
-        Vector3d center,
-        Vector3d halfExtents,
+        Vec3d center,
+        Vec3d halfExtents,
         cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d orientation
 ) implements CollisionBody {
 
@@ -31,26 +27,36 @@ public record OrientedBox(
         Objects.requireNonNull(orientation, "orientation");
         requireFinite(center, "center");
         requireFinite(halfExtents, "halfExtents");
-        if (halfExtents.x < 0.0D
-                || halfExtents.y < 0.0D
-                || halfExtents.z < 0.0D) {
+        if (halfExtents.x() < 0.0D
+                || halfExtents.y() < 0.0D
+                || halfExtents.z() < 0.0D) {
             throw new IllegalArgumentException(
                     "halfExtents must be non-negative: " + halfExtents);
         }
-        center = new Vector3d(center);
-        halfExtents = new Vector3d(halfExtents);
+    }
+
+    public OrientedBox(
+            Vec3d center,
+            double radius,
+            cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d orientation
+    ) {
+        this(
+                center,
+                new Vec3d(radius, radius, radius),
+                orientation
+        );
     }
 
     public static OrientedBox fromDimensions(
-            Vector3dc center,
+            Vec3d center,
             double width,
             double height,
             cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d orientation
     ) {
         Objects.requireNonNull(orientation, "orientation");
         return new OrientedBox(
-                new Vector3d(center),
-                new Vector3d(width * 0.5D, height * 0.5D, width * 0.5D),
+                center,
+                new Vec3d(width * 0.5D, height * 0.5D, width * 0.5D),
                 orientation);
     }
 
@@ -59,7 +65,7 @@ public record OrientedBox(
         Objects.requireNonNull(box, "box");
         return new OrientedBox(
                 box.center(),
-                box.halfExtents(new Vector3d()),
+                box.halfExtents(),
                 cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d.IDENTITY);
     }
 
@@ -91,17 +97,6 @@ public record OrientedBox(
         );
     }
 
-    /** Fresh defensive center copy. */
-    @Override
-    public Vector3d center() {
-        return new Vector3d(center);
-    }
-
-    /** Fresh defensive half-extents copy. */
-    public Vector3d halfExtents() {
-        return new Vector3d(halfExtents);
-    }
-
     /**
      * Converts a world-space POINT into box-local coordinates.
      *
@@ -109,17 +104,11 @@ public record OrientedBox(
      * this method for displacement, velocity, normal, axis, acceleration or any
      * other free vector.</p>
      */
-    public Vector3d worldPointToLocal(
-            Vector3dc worldPoint,
-            Vector3d dest
+    public Vec3d worldPointToLocal(
+            Vec3d worldPoint
     ) {
         Objects.requireNonNull(worldPoint, "worldPoint");
-        Objects.requireNonNull(dest, "dest");
-
-        dest.set(worldPoint)
-                .sub(center.x, center.y, center.z);
-
-        return orientation.worldToLocal(dest, dest);
+        return orientation.worldPointToLocal(worldPoint, center);
     }
 
     /**
@@ -127,20 +116,11 @@ public record OrientedBox(
      *
      * <p>Translation by {@link #center()} is part of this operation.</p>
      */
-    public Vector3d localPointToWorld(
-            Vector3dc localPoint,
-            Vector3d dest
+    public Vec3d localPointToWorld(
+            Vec3d localPoint
     ) {
         Objects.requireNonNull(localPoint, "localPoint");
-        Objects.requireNonNull(dest, "dest");
-
-        orientation.localToWorld(localPoint, dest);
-
-        return dest.add(
-                center.x,
-                center.y,
-                center.z
-        );
+        return orientation.localPointToWorld(localPoint, center);
     }
 
     /**
@@ -149,17 +129,11 @@ public record OrientedBox(
      * <p>No translation is applied. This is the correct operation for velocity,
      * displacement, normals, axes, accelerations and other directions.</p>
      */
-    public Vector3d worldVectorToLocal(
-            Vector3dc worldVector,
-            Vector3d dest
+    public Vec3d worldVectorToLocal(
+            Vec3d worldVector
     ) {
         Objects.requireNonNull(worldVector, "worldVector");
-        Objects.requireNonNull(dest, "dest");
-
-        return orientation.worldToLocal(
-                worldVector,
-                dest
-        );
+        return orientation.worldToLocal(worldVector);
     }
 
     /**
@@ -167,57 +141,40 @@ public record OrientedBox(
      *
      * <p>No translation is applied.</p>
      */
-    public Vector3d localVectorToWorld(
-            Vector3dc localVector,
-            Vector3d dest
+    public Vec3d localVectorToWorld(
+            Vec3d localVector
     ) {
         Objects.requireNonNull(localVector, "localVector");
-        Objects.requireNonNull(dest, "dest");
-
-        return orientation.localToWorld(
-                localVector,
-                dest
-        );
+        return orientation.localToWorld(localVector);
     }
 
-    public Vector3d axisX(Vector3d dest) {
-        return orientation.axisX(dest);
+    public Vec3d axisX() {
+        return orientation.axisX();
     }
 
-    public Vector3d axisY(Vector3d dest) {
-        return orientation.axisY(dest);
+    public Vec3d axisY() {
+        return orientation.axisY();
     }
 
-    public Vector3d axisZ(Vector3d dest) {
-        return orientation.axisZ(dest);
-    }
-
-    /** Fresh copy of the local +X axis in world space. */
-    public Vector3d axisX() {
-        return orientation.axisX(new Vector3d());
-    }
-
-    public Vector3d axisY() {
-        return orientation.axisY(new Vector3d());
-    }
-
-    public Vector3d axisZ() {
-        return orientation.axisZ(new Vector3d());
+    public Vec3d axisZ() {
+        return orientation.axisZ();
     }
 
     /**
      * Closest point on this box's exact surface (or interior) to a world point.
      * Pure geometry: no Entity, Level, runtime, or ground semantics.
      */
-    public Vector3d closestPointTo(Vector3dc worldPoint) {
+    public Vec3d closestPointTo(Vec3d worldPoint) {
         Objects.requireNonNull(worldPoint, "worldPoint");
 
-        Vector3d local = worldPointToLocal(worldPoint, new Vector3d());
-        local.x = clamp(local.x, -halfExtents.x, halfExtents.x);
-        local.y = clamp(local.y, -halfExtents.y, halfExtents.y);
-        local.z = clamp(local.z, -halfExtents.z, halfExtents.z);
+        Vec3d local = worldPointToLocal(worldPoint);
+        local = new Vec3d(
+                clamp(local.x(), -halfExtents.x(), halfExtents.x()),
+                clamp(local.y(), -halfExtents.y(), halfExtents.y()),
+                clamp(local.z(), -halfExtents.z(), halfExtents.z())
+        );
 
-        return localPointToWorld(local, new Vector3d());
+        return localPointToWorld(local);
     }
 
     private static double clamp(double value, double min, double max) {
@@ -227,10 +184,10 @@ public record OrientedBox(
     }
 
     @Override
-    public OrientedBox move(Vector3dc displacement) {
+    public OrientedBox move(Vec3d displacement) {
         Objects.requireNonNull(displacement, "displacement");
         return new OrientedBox(
-                new Vector3d(center).add(displacement),
+                center.add(displacement),
                 halfExtents,
                 orientation);
     }
@@ -245,31 +202,26 @@ public record OrientedBox(
 
     @Override
     public cc.sighs.gravityengine.math.geometry.Aabb3d enclosingAabb() {
-        cc.sighs.gravityengine.math.geometry.MutableAabb3d bounds = cc.sighs.gravityengine.math.geometry.ObbMath.enclosingAabb(
-                toObb3d(), new cc.sighs.gravityengine.math.geometry.MutableAabb3d());
-        return bounds.immutable();
+        return cc.sighs.gravityengine.math.geometry.ObbMath.enclosingAabb(
+                center,
+                halfExtents,
+                orientation
+        );
     }
 
     /** World-space corner for signed corner coordinates in {-1, 1}. */
-    public Vector3d corner(double xSign, double ySign, double zSign) {
-        return toObb3d().corner(
-                xSign, ySign, zSign, new Vector3d());
+    public Vec3d corner(double xSign, double ySign, double zSign) {
+        Objects.requireNonNull(center, "center");
+        return orientation.localPointToWorld(
+                halfExtents.x() * xSign,
+                halfExtents.y() * ySign,
+                halfExtents.z() * zSign,
+                center
+        );
     }
 
-    /** World-space corner written into a caller-owned destination. */
-    public Vector3d corner(
-            double xSign,
-            double ySign,
-            double zSign,
-            Vector3d dest
-    ) {
-        return toObb3d().corner(xSign, ySign, zSign, dest);
-    }
-
-    private static void requireFinite(Vector3d vector, String name) {
-        if (!Double.isFinite(vector.x)
-                || !Double.isFinite(vector.y)
-                || !Double.isFinite(vector.z)) {
+    private static void requireFinite(Vec3d vector, String name) {
+        if (!vector.isFinite()) {
             throw new IllegalArgumentException(
                     name + " must be finite: " + vector);
         }

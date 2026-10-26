@@ -1,8 +1,6 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /** Immutable centered OBB represented by half extents and three orthonormal basis axes. */
@@ -43,16 +41,16 @@ public final class Obb3d {
     }
 
     public Obb3d(
-            Vector3dc center,
-            Vector3dc halfExtents,
-            Vector3dc axisX,
-            Vector3dc axisY,
-            Vector3dc axisZ
+            Vec3d center,
+            Vec3d halfExtents,
+            Vec3d axisX,
+            Vec3d axisY,
+            Vec3d axisZ
     ) {
         this(center, halfExtents, new OrthonormalFrame3d(axisX, axisY, axisZ));
     }
 
-    public Obb3d(Vector3dc center, Vector3dc halfExtents, OrthonormalFrame3d frame) {
+    public Obb3d(Vec3d center, Vec3d halfExtents, OrthonormalFrame3d frame) {
         Objects.requireNonNull(center, "center");
         Objects.requireNonNull(halfExtents, "halfExtents");
         this.frame = Objects.requireNonNull(frame, "frame");
@@ -69,40 +67,90 @@ public final class Obb3d {
         this.halfZ = halfExtents.z();
     }
 
-    public Vector3d center(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(
-                this.centerX, this.centerY, this.centerZ
-        );
+    public Vec3d center() {
+        return new Vec3d(this.centerX, this.centerY, this.centerZ);
     }
 
-    public Vector3d halfExtents(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(this.halfX, this.halfY, this.halfZ);
+    public Vec3d halfExtents() {
+        return new Vec3d(this.halfX, this.halfY, this.halfZ);
     }
 
-    public Vector3d axisX(Vector3d dest) { return this.frame.axisX(dest); }
-    public Vector3d axisY(Vector3d dest) { return this.frame.axisY(dest); }
-    public Vector3d axisZ(Vector3d dest) { return this.frame.axisZ(dest); }
+    public Vec3d axisX() { return this.frame.axisX(); }
+    public Vec3d axisY() { return this.frame.axisY(); }
+    public Vec3d axisZ() { return this.frame.axisZ(); }
 
     /** The immutable local frame (axisX/axisY/axisZ = local +X/+Y/+Z). */
     public OrthonormalFrame3d frame() {
         return this.frame;
     }
 
-    public Vector3d corner(double sx, double sy, double sz, Vector3d dest) {
+    public Vec3d corner(double sx, double sy, double sz) {
         requireFinite(sx, "sx");
         requireFinite(sy, "sy");
         requireFinite(sz, "sz");
-        Objects.requireNonNull(dest, "dest");
-        this.frame.localToWorld(
+        return this.frame.localPointToWorld(
                 this.halfX * sx,
                 this.halfY * sy,
                 this.halfZ * sz,
-                dest
+                this.centerX,
+                this.centerY,
+                this.centerZ
         );
-        return dest.add(this.centerX, this.centerY, this.centerZ);
     }
 
-    public double radiusAlong(Vector3dc unitAxis) {
+    /** Fused world-point to box-local transform; translation uses center scalars. */
+    public Vec3d worldPointToLocal(Vec3d worldPoint) {
+        Objects.requireNonNull(worldPoint, "worldPoint");
+        OrthonormalFrame3d.requireFinite(worldPoint, "worldPoint");
+        return this.frame.worldPointToLocal(
+                worldPoint,
+                this.centerX,
+                this.centerY,
+                this.centerZ
+        );
+    }
+
+    /** Fused box-local to world-point transform; translation uses center scalars. */
+    public Vec3d localPointToWorld(Vec3d localPoint) {
+        Objects.requireNonNull(localPoint, "localPoint");
+        OrthonormalFrame3d.requireFinite(localPoint, "localPoint");
+        return this.frame.localPointToWorld(
+                localPoint.x(),
+                localPoint.y(),
+                localPoint.z(),
+                this.centerX,
+                this.centerY,
+                this.centerZ
+        );
+    }
+
+    /** Fused box-local to world-point transform without an intermediate local vector. */
+    public Vec3d localPointToWorld(double x, double y, double z) {
+        requireFinite(x, "x");
+        requireFinite(y, "y");
+        requireFinite(z, "z");
+        return this.frame.localPointToWorld(
+                x,
+                y,
+                z,
+                this.centerX,
+                this.centerY,
+                this.centerZ
+        );
+    }
+
+    /**
+     * Fused box-local FREE VECTOR transform. Translation is deliberately not
+     * applied; only the frame basis contributes.
+     */
+    public Vec3d localVectorToWorld(double x, double y, double z) {
+        requireFinite(x, "x");
+        requireFinite(y, "y");
+        requireFinite(z, "z");
+        return this.frame.localToWorld(x, y, z);
+    }
+
+    public double radiusAlong(Vec3d unitAxis) {
         Objects.requireNonNull(unitAxis, "unitAxis");
         OrthonormalFrame3d.requireFinite(unitAxis, "unitAxis");
         if (Math.abs(unitAxis.lengthSquared() - 1.0D) > GeometryTolerance.ORTHONORMAL) {
@@ -111,17 +159,37 @@ public final class Obb3d {
         return radiusAlongUnitUnchecked(unitAxis);
     }
 
-    double radiusAlongUnitUnchecked(Vector3dc unitAxis) {
-        double radius = this.halfX * Math.abs(this.frame.axisXDot(unitAxis))
-                + this.halfY * Math.abs(this.frame.axisYDot(unitAxis))
-                + this.halfZ * Math.abs(this.frame.axisZDot(unitAxis));
-        if (!Double.isFinite(radius) || radius < 0.0D) {
-            throw new IllegalArgumentException("projected radius must be finite and non-negative");
+    double radiusAlongUnitUnchecked(Vec3d unitAxis) {
+        return radiusAlongUnitUnchecked(
+                unitAxis.x(),
+                unitAxis.y(),
+                unitAxis.z()
+        );
+    }
+
+    double radiusAlongUnitUnchecked(
+            double x,
+            double y,
+            double z
+    ) {
+        double radius =
+                this.halfX
+                        * Math.abs(this.frame.axisXDot(x, y, z))
+                        + this.halfY
+                        * Math.abs(this.frame.axisYDot(x, y, z))
+                        + this.halfZ
+                        * Math.abs(this.frame.axisZDot(x, y, z));
+
+        if (!Double.isFinite(radius)
+                || radius < 0.0D) {
+            throw new IllegalArgumentException(
+                    "projected radius must be finite and non-negative");
         }
+
         return radius;
     }
 
-    public Obb3d moved(Vector3dc displacement) {
+    public Obb3d moved(Vec3d displacement) {
         Objects.requireNonNull(displacement, "displacement");
         OrthonormalFrame3d.requireFinite(displacement, "displacement");
         return new Obb3d(
@@ -135,12 +203,12 @@ public final class Obb3d {
         );
     }
 
-    double centerX() { return this.centerX; }
-    double centerY() { return this.centerY; }
-    double centerZ() { return this.centerZ; }
-    double halfX() { return this.halfX; }
-    double halfY() { return this.halfY; }
-    double halfZ() { return this.halfZ; }
+    public double centerX() { return this.centerX; }
+    public double centerY() { return this.centerY; }
+    public double centerZ() { return this.centerZ; }
+    public double halfX() { return this.halfX; }
+    public double halfY() { return this.halfY; }
+    public double halfZ() { return this.halfZ; }
     double worldExtentX() { return this.frame.extentAlongWorldX(this.halfX, this.halfY, this.halfZ); }
     double worldExtentY() { return this.frame.extentAlongWorldY(this.halfX, this.halfY, this.halfZ); }
     double worldExtentZ() { return this.frame.extentAlongWorldZ(this.halfX, this.halfY, this.halfZ); }

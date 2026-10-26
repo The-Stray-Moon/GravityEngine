@@ -15,12 +15,12 @@ public abstract class SlimeStepResponseMixin {
     @WrapOperation(method = "stepOn", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/entity/Entity;getDeltaMovement()Lnet/minecraft/world/phys/Vec3;"), require = 2)
     private Vec3 gravityengine$local(Entity entity, Operation<Vec3> original) {
-        return VanillaBlockResponse.local(entity, original.call(entity));
+        return VanillaBlockResponse.stepLocal(entity, original.call(entity));
     }
 
     @WrapOperation(method = "stepOn", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/entity/Entity;setDeltaMovement(Lnet/minecraft/world/phys/Vec3;)V"), require = 1)
     private void gravityengine$world(Entity entity, Vec3 local, Operation<Void> original) {
-        original.call(entity, VanillaBlockResponse.world(entity, local));
+        original.call(entity, VanillaBlockResponse.stepWorld(entity, local));
     }
 }

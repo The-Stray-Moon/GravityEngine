@@ -1,5 +1,6 @@
 package cc.sighs.gravityengine.math.geometry;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /** Allocation-controlled derived OBB geometry. */
@@ -19,6 +20,49 @@ public final class ObbMath {
                 box.centerX() + extentX,
                 box.centerY() + extentY,
                 box.centerZ() + extentZ
+        );
+    }
+
+    /** Immutable enclosing bounds without a throwaway OBB or mutable destination. */
+    public static Aabb3d enclosingAabb(
+            Vec3d center,
+            Vec3d halfExtents,
+            OrthonormalFrame3d frame
+    ) {
+        Objects.requireNonNull(center, "center");
+        Objects.requireNonNull(halfExtents, "halfExtents");
+        Objects.requireNonNull(frame, "frame");
+        OrthonormalFrame3d.requireFinite(center, "center");
+        OrthonormalFrame3d.requireFinite(halfExtents, "halfExtents");
+        if (halfExtents.x() < 0.0D
+                || halfExtents.y() < 0.0D
+                || halfExtents.z() < 0.0D) {
+            throw new IllegalArgumentException(
+                    "halfExtents must be non-negative: " + halfExtents
+            );
+        }
+        double extentX = frame.extentAlongWorldX(
+                halfExtents.x(),
+                halfExtents.y(),
+                halfExtents.z()
+        );
+        double extentY = frame.extentAlongWorldY(
+                halfExtents.x(),
+                halfExtents.y(),
+                halfExtents.z()
+        );
+        double extentZ = frame.extentAlongWorldZ(
+                halfExtents.x(),
+                halfExtents.y(),
+                halfExtents.z()
+        );
+        return new Aabb3d(
+                center.x() - extentX,
+                center.y() - extentY,
+                center.z() - extentZ,
+                center.x() + extentX,
+                center.y() + extentY,
+                center.z() + extentZ
         );
     }
 }

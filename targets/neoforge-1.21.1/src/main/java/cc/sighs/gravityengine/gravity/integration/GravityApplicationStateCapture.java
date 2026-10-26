@@ -2,7 +2,6 @@ package cc.sighs.gravityengine.gravity.integration;
 
 import cc.sighs.gravityengine.attitude.BodyAttitudePlayerState;
 import cc.sighs.gravityengine.attitude.runtime.MinecraftBodyAttitudeSnapshotAdapter;
-
 import cc.sighs.gravityengine.gravity.policy.GravityApplicationPlanner;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -47,7 +46,7 @@ public final class GravityApplicationStateCapture {
                 living.isSwimming(),
                 living.isAutoSpinAttack(),
                 living.onClimbable(),
-                false,
+                living.isDeadOrDying(),
                 false,
                 false,
                 false);

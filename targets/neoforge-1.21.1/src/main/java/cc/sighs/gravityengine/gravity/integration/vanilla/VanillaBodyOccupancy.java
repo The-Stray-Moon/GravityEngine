@@ -1,11 +1,13 @@
 package cc.sighs.gravityengine.gravity.integration.vanilla;
 
-import cc.sighs.gravityengine.gravity.collision.MinecraftGeometryAdapter;
+import cc.sighs.gravityengine.gravity.collision.CollisionNarrowPhase;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CollisionBody;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.OrientedBox;
-import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
+import cc.sighs.gravityengine.gravity.minecraft.collision.MinecraftCollisionGeometryAdapter;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySelector;
 import net.minecraft.world.level.CollisionGetter;
@@ -13,9 +15,9 @@ import net.minecraft.world.level.EntityGetter;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
-import org.joml.Vector3d;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Predicate;
 
 /**
@@ -61,21 +63,13 @@ public final class VanillaBodyOccupancy {
      * noPhysics remains the surrounding native policy's responsibility.
      */
     public static CollisionBody capturePhysicalBody(Entity entity) {
-        if (GravityInfluencePolicy.usesExactBodyCollision(entity)) {
-            var frame = GravityFrameAccess.authoritativeFrame(entity);
-            return GravityEntityGeometry.candidateBody(
-                    GravityEntityGeometry.dimensions(entity),
-                    entity.position(),
-                    frame.up()
-            );
-        }
-        return fromVanillaBounds(entity.getBoundingBox());
+        return GravityEntityGeometry.body(entity);
     }
 
     /** Use only for bounds captured while Vanilla owned the physical body. */
     public static CollisionBody fromVanillaBounds(AABB bounds) {
         return OrientedBox.axisAligned(
-                MinecraftGeometryAdapter.toAabb3d(bounds)
+                MinecraftCollisionGeometryAdapter.toAabb3d(bounds)
         );
     }
 
@@ -89,42 +83,29 @@ public final class VanillaBodyOccupancy {
             Vec3 requestedP
     ) {
         return resolved.move(
-                MinecraftGeometryAdapter.toJoml(
-                        requestedP.subtract(resolvedP),
-                        new Vector3d()
+                MinecraftMathAdapter.toVec3d(
+                        requestedP.subtract(resolvedP)
                 )
         );
     }
 
     /**
-     * Exact geometry operand for Vanilla's
-     * isPlayerCollidingWithAnythingNew policy.
-     *
-     * <p>Vanilla 1.21.1 getCollisions enumerates entity candidates first,
-     * followed by block candidates. Preserve that candidate universe and
-     * ordering, but retain entity identity until narrow phase so a custom
-     * target's enclosing AABB never becomes hard-occupancy authority.</p>
-     *
-     * <p>This performs static overlap tests only. It never invokes movement,
-     * CCD, step solving, StickToFloor, recovery or packet policy.</p>
+     * New-occupancy predicate against one validation-owned rigid snapshot.
      */
     public static boolean hasNewCollision(
             CollisionGetter level,
-            Entity entity,
+            ServerPlayer entity,
             CollisionBody oldBody,
-            double x,
-            double y,
-            double z
+            CollisionBody requested,
+            RigidOccupancySnapshot snapshot
     ) {
-        CollisionBody resolved = capturePhysicalBody(entity);
+        Objects.requireNonNull(level, "level");
+        Objects.requireNonNull(entity, "entity");
+        Objects.requireNonNull(oldBody, "oldBody");
+        Objects.requireNonNull(requested, "requested");
+        Objects.requireNonNull(snapshot, "snapshot");
 
-        CollisionBody requested = atRequestedPosition(
-                resolved,
-                entity.position(),
-                new Vec3(x, y, z)
-        );
-
-        AABB requestedEnvelope = MinecraftGeometryAdapter
+        AABB requestedEnvelope = MinecraftCollisionGeometryAdapter
                 .toMinecraft(requested.enclosingAabb())
                 .deflate(PACKET_DEFLATION);
 
@@ -141,6 +122,15 @@ public final class VanillaBodyOccupancy {
                         entity,
                         requestedEnvelope
                 )
+        )) {
+            return true;
+        }
+
+        if (introducesDynamicRigidCollision(
+                oldBody,
+                requested,
+                snapshot,
+                true
         )) {
             return true;
         }
@@ -208,20 +198,21 @@ public final class VanillaBodyOccupancy {
     }
 
     /**
-     * Exact replacement for only the old physical-occupancy operand in
-     * Vanilla's moved-wrongly expression.
-     *
-     * <p>Preserve Vanilla CollisionGetter#noCollision ordering:
-     * block -> entity -> world border.</p>
-     *
-     * <p>World-border pieces use the same exact-body occupancy refinement.</p>
+     * Old-occupancy predicate against one validation-owned rigid snapshot.
      */
     public static boolean oldBodyClear(
             CollisionGetter level,
-            Entity entity,
+            ServerPlayer entity,
             AABB oldEnvelope,
-            CollisionBody oldBody
+            CollisionBody oldBody,
+            RigidOccupancySnapshot snapshot
     ) {
+        Objects.requireNonNull(level, "level");
+        Objects.requireNonNull(entity, "entity");
+        Objects.requireNonNull(oldEnvelope, "oldEnvelope");
+        Objects.requireNonNull(oldBody, "oldBody");
+        Objects.requireNonNull(snapshot, "snapshot");
+
         /*
          * Vanilla noCollision checks blocks first.
          */
@@ -248,6 +239,10 @@ public final class VanillaBodyOccupancy {
             if (occupies(oldBody, candidate)) {
                 return false;
             }
+        }
+
+        if (!dynamicRigidClear(oldBody, snapshot, true)) {
+            return false;
         }
 
         /*
@@ -300,16 +295,8 @@ public final class VanillaBodyOccupancy {
         if (GravityInfluencePolicy.usesCustomBody(
                 candidate
         )) {
-            var frame =
-                    GravityFrameAccess.authoritativeFrame(
-                            candidate
-                    );
-
             CollisionBody exact =
-                    GravityEntityGeometry.exactBody(
-                            candidate,
-                            frame
-                    );
+                    GravityEntityGeometry.exactBody(candidate);
 
             return cc.sighs.gravityengine.gravity.collision.CollisionNarrowPhase.intersects(body, exact);
         }
@@ -318,6 +305,119 @@ public final class VanillaBodyOccupancy {
                 body,
                 candidate.getBoundingBox()
         );
+    }
+
+    static boolean introducesDynamicRigidCollision(
+            CollisionBody oldBody,
+            CollisionBody requestedBody,
+            RigidOccupancySnapshot snapshot
+    ) {
+        return introducesDynamicRigidCollision(
+                oldBody,
+                requestedBody,
+                snapshot,
+                false
+        );
+    }
+
+    /**
+     * Dynamic-rigid endpoint occupancy against one validation-owned snapshot.
+     *
+     * <p>Every executed narrow-phase call consumes one test from the snapshot's
+     * operation budget. Budget exhaustion is fail closed: the caller must not
+     * accept a position whose rigid geometry could not be proven clear.</p>
+     *
+     * @param failClosedOnBudgetExhaustion when {@code true}, returning
+     *        {@code true} reports an indeterminate (treated-as-collision)
+     *        result instead of a proven new collision
+     */
+    static boolean introducesDynamicRigidCollision(
+            CollisionBody oldBody,
+            CollisionBody requestedBody,
+            RigidOccupancySnapshot snapshot,
+            boolean failClosedOnBudgetExhaustion
+    ) {
+        if (snapshot.indeterminate()) {
+            return failClosedOnBudgetExhaustion;
+        }
+        CollisionBody oldQuery =
+                packetInterior(oldBody);
+
+        CollisionBody requestedQuery =
+                packetInterior(requestedBody);
+
+        for (CollisionBody rigid : snapshot.endpointBodies()) {
+            if (!snapshot.chargeNarrowPhaseTest()) {
+                return failClosedOnBudgetExhaustion;
+            }
+
+            /*
+             * Packet occupancy is an endpoint occupancy query, not a second
+             * movement sweep. t=1 is the captured publication's terminal/current
+             * pose.
+             */
+            boolean newOverlap =
+                    CollisionNarrowPhase.intersects(
+                            requestedQuery,
+                            rigid
+                    );
+
+            if (!newOverlap) continue;
+            if (!snapshot.chargeNarrowPhaseTest()) {
+                return failClosedOnBudgetExhaustion;
+            }
+            boolean oldOverlap =
+                    CollisionNarrowPhase.intersects(
+                            oldQuery,
+                            rigid
+                    );
+
+            if (newOverlap && !oldOverlap) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static boolean dynamicRigidClear(
+            CollisionBody body,
+            RigidOccupancySnapshot snapshot
+    ) {
+        return dynamicRigidClear(body, snapshot, false);
+    }
+
+    /**
+     * Old-occupancy dynamic-rigid check against one snapshot.
+     *
+     * @param failClosedOnBudgetExhaustion when {@code true}, budget
+     *        exhaustion reports "not proven clear"
+     */
+    static boolean dynamicRigidClear(
+            CollisionBody body,
+            RigidOccupancySnapshot snapshot,
+            boolean failClosedOnBudgetExhaustion
+    ) {
+        if (snapshot.indeterminate()) {
+            return !failClosedOnBudgetExhaustion;
+        }
+        CollisionBody query =
+                packetInterior(body);
+
+        for (CollisionBody rigid : snapshot.endpointBodies()) {
+            if (!snapshot.chargeNarrowPhaseTest()) {
+                return !failClosedOnBudgetExhaustion;
+            }
+
+            if (CollisionNarrowPhase.intersects(
+                    query,
+                    rigid
+            )) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

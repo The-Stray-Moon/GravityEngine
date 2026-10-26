@@ -1,22 +1,19 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /**
  * Immutable orthonormal basis with direct world/local transforms.
  *
  * <p>This type is the single generic orthogonal reference-frame math
- * primitive in GravityEngine.  Domain frames (gravity, collision geometry,
+ * primitive in GravityEngine. Domain frames (gravity, collision geometry,
  * body-attitude look reference) may keep their own metadata and axis
  * conventions, but every world/local transform is executed here exactly
- * once; Minecraft-facing types only marshal coordinates into and out of the
- * {@code Vector3d}/{@code Vector3dc} API.</p>
+ * once.</p>
  */
 public final class OrthonormalFrame3d {
-    /** Canonical immutable world frame. Destination-based accessors never expose its storage. */
+    /** Canonical immutable world frame. */
     public static final OrthonormalFrame3d IDENTITY = new OrthonormalFrame3d(
             1.0D, 0.0D, 0.0D,
             0.0D, 1.0D, 0.0D,
@@ -60,7 +57,7 @@ public final class OrthonormalFrame3d {
         this.zz = zz;
     }
 
-    public OrthonormalFrame3d(Vector3dc axisX, Vector3dc axisY, Vector3dc axisZ) {
+    public OrthonormalFrame3d(Vec3d axisX, Vec3d axisY, Vec3d axisZ) {
         Objects.requireNonNull(axisX, "axisX");
         Objects.requireNonNull(axisY, "axisY");
         Objects.requireNonNull(axisZ, "axisZ");
@@ -88,48 +85,228 @@ public final class OrthonormalFrame3d {
         this.zz = axisZ.z();
     }
 
-    public Vector3d axisX(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(this.xx, this.xy, this.xz);
+    public Vec3d axisX() {
+        return new Vec3d(this.xx, this.xy, this.xz);
     }
 
-    public Vector3d axisY(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(this.yx, this.yy, this.yz);
+    public Vec3d axisY() {
+        return new Vec3d(this.yx, this.yy, this.yz);
     }
 
-    public Vector3d axisZ(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(this.zx, this.zy, this.zz);
+    public Vec3d axisZ() {
+        return new Vec3d(this.zx, this.zy, this.zz);
     }
 
-    public Vector3d worldToLocal(Vector3dc world, Vector3d dest) {
+    void writeAxes(
+            double[] target,
+            int offset
+    ) {
+        Objects.requireNonNull(target, "target");
+
+        if (offset < 0 || offset + 9 > target.length) {
+            throw new IndexOutOfBoundsException(offset);
+        }
+
+        target[offset] = this.xx;
+        target[offset + 1] = this.xy;
+        target[offset + 2] = this.xz;
+
+        target[offset + 3] = this.yx;
+        target[offset + 4] = this.yy;
+        target[offset + 5] = this.yz;
+
+        target[offset + 6] = this.zx;
+        target[offset + 7] = this.zy;
+        target[offset + 8] = this.zz;
+    }
+
+    public Vec3d worldToLocal(Vec3d world) {
         Objects.requireNonNull(world, "world");
-        Objects.requireNonNull(dest, "dest");
         requireFinite(world, "world");
         double x = world.x();
         double y = world.y();
         double z = world.z();
-        return dest.set(
+        return new Vec3d(
                 x * this.xx + y * this.xy + z * this.xz,
                 x * this.yx + y * this.yy + z * this.yz,
                 x * this.zx + y * this.zy + z * this.zz
         );
     }
 
-    public Vector3d localToWorld(Vector3dc local, Vector3d dest) {
+    public Vec3d localToWorld(Vec3d local) {
         Objects.requireNonNull(local, "local");
-        Objects.requireNonNull(dest, "dest");
         requireFinite(local, "local");
         double x = local.x();
         double y = local.y();
         double z = local.z();
-        return dest.set(
+        return new Vec3d(
                 this.xx * x + this.yx * y + this.zx * z,
                 this.xy * x + this.yy * y + this.zy * z,
                 this.xz * x + this.yz * y + this.zz * z
         );
     }
 
+    Vec3d localToWorld(double x, double y, double z) {
+        return new Vec3d(
+                this.xx * x + this.yx * y + this.zx * z,
+                this.xy * x + this.yy * y + this.zy * z,
+                this.xz * x + this.yz * y + this.zz * z
+        );
+    }
+
+    Vec3d localPointToWorld(
+            double x,
+            double y,
+            double z,
+            double originX,
+            double originY,
+            double originZ
+    ) {
+        return new Vec3d(
+                this.xx * x + this.yx * y + this.zx * z + originX,
+                this.xy * x + this.yy * y + this.zy * z + originY,
+                this.xz * x + this.yz * y + this.zz * z + originZ
+        );
+    }
+
+    double axisXDot(Vec3d vector) {
+        return axisXDot(
+                vector.x(),
+                vector.y(),
+                vector.z()
+        );
+    }
+
+    double axisYDot(Vec3d vector) {
+        return axisYDot(
+                vector.x(),
+                vector.y(),
+                vector.z()
+        );
+    }
+
+    double axisZDot(Vec3d vector) {
+        return axisZDot(
+                vector.x(),
+                vector.y(),
+                vector.z()
+        );
+    }
+
+    double axisXDot(
+            double x,
+            double y,
+            double z
+    ) {
+        return this.xx * x
+                + this.xy * y
+                + this.xz * z;
+    }
+
+    double axisYDot(
+            double x,
+            double y,
+            double z
+    ) {
+        return this.yx * x
+                + this.yy * y
+                + this.yz * z;
+    }
+
+    double axisZDot(
+            double x,
+            double y,
+            double z
+    ) {
+        return this.zx * x
+                + this.zy * y
+                + this.zz * z;
+    }
+
+    double extentAlongWorldX(double halfX, double halfY, double halfZ) {
+        return halfX * Math.abs(this.xx)
+                + halfY * Math.abs(this.yx)
+                + halfZ * Math.abs(this.zx);
+    }
+
+    double extentAlongWorldY(double halfX, double halfY, double halfZ) {
+        return halfX * Math.abs(this.xy)
+                + halfY * Math.abs(this.yy)
+                + halfZ * Math.abs(this.zy);
+    }
+
+    double extentAlongWorldZ(double halfX, double halfY, double halfZ) {
+        return halfX * Math.abs(this.xz)
+                + halfY * Math.abs(this.yz)
+                + halfZ * Math.abs(this.zz);
+    }
+
+    public Vec3d worldPointToLocal(Vec3d worldPoint, Vec3d origin) {
+        Objects.requireNonNull(worldPoint, "worldPoint");
+        Objects.requireNonNull(origin, "origin");
+        requireFinite(worldPoint, "worldPoint");
+        requireFinite(origin, "origin");
+        return worldPointToLocal(
+                worldPoint,
+                origin.x(),
+                origin.y(),
+                origin.z()
+        );
+    }
+
+    Vec3d worldPointToLocal(
+            Vec3d worldPoint,
+            double originX,
+            double originY,
+            double originZ
+    ) {
+        double x = worldPoint.x() - originX;
+        double y = worldPoint.y() - originY;
+        double z = worldPoint.z() - originZ;
+        return new Vec3d(
+                x * this.xx + y * this.xy + z * this.xz,
+                x * this.yx + y * this.yy + z * this.yz,
+                x * this.zx + y * this.zy + z * this.zz
+        );
+    }
+
+    public Vec3d localPointToWorld(Vec3d localPoint, Vec3d origin) {
+        Objects.requireNonNull(localPoint, "localPoint");
+        Objects.requireNonNull(origin, "origin");
+        requireFinite(localPoint, "localPoint");
+        requireFinite(origin, "origin");
+        return localPointToWorld(
+                localPoint.x(),
+                localPoint.y(),
+                localPoint.z(),
+                origin.x(),
+                origin.y(),
+                origin.z()
+        );
+    }
+
+    /** Fused local-point transform without an intermediate local vector. */
+    public Vec3d localPointToWorld(
+            double x,
+            double y,
+            double z,
+            Vec3d origin
+    ) {
+        Objects.requireNonNull(origin, "origin");
+        requireFinite(x, y, z, "localPoint");
+        requireFinite(origin, "origin");
+        return localPointToWorld(
+                x,
+                y,
+                z,
+                origin.x(),
+                origin.y(),
+                origin.z()
+        );
+    }
+
     /**
-     * Exact component-wise value semantics.  The frame is immutable and all
+     * Exact component-wise value semantics. The frame is immutable and all
      * nine axis components are stored exactly as supplied, so bit equality
      * matches the value equality of the doubles that produced the frame.
      */
@@ -170,65 +347,13 @@ public final class OrthonormalFrame3d {
         return (int) (bits ^ (bits >>> 32));
     }
 
-    Vector3d localToWorld(double x, double y, double z, Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(
-                this.xx * x + this.yx * y + this.zx * z,
-                this.xy * x + this.yy * y + this.zy * z,
-                this.xz * x + this.yz * y + this.zz * z
-        );
-    }
-
-    double axisXDot(Vector3dc vector) {
-        return this.xx * vector.x() + this.xy * vector.y() + this.xz * vector.z();
-    }
-
-    double axisYDot(Vector3dc vector) {
-        return this.yx * vector.x() + this.yy * vector.y() + this.yz * vector.z();
-    }
-
-    double axisZDot(Vector3dc vector) {
-        return this.zx * vector.x() + this.zy * vector.y() + this.zz * vector.z();
-    }
-
-    double extentAlongWorldX(double halfX, double halfY, double halfZ) {
-        return halfX * Math.abs(this.xx)
-                + halfY * Math.abs(this.yx)
-                + halfZ * Math.abs(this.zx);
-    }
-
-    double extentAlongWorldY(double halfX, double halfY, double halfZ) {
-        return halfX * Math.abs(this.xy)
-                + halfY * Math.abs(this.yy)
-                + halfZ * Math.abs(this.zy);
-    }
-
-    double extentAlongWorldZ(double halfX, double halfY, double halfZ) {
-        return halfX * Math.abs(this.xz)
-                + halfY * Math.abs(this.yz)
-                + halfZ * Math.abs(this.zz);
-    }
-
-    public Vector3d worldPointToLocal(Vector3dc worldPoint, Vector3dc origin, Vector3d dest) {
-        Objects.requireNonNull(worldPoint, "worldPoint");
-        Objects.requireNonNull(origin, "origin");
-        Objects.requireNonNull(dest, "dest");
-        requireFinite(worldPoint, "worldPoint");
-        requireFinite(origin, "origin");
-        dest.set(worldPoint).sub(origin);
-        return worldToLocal(dest, dest);
-    }
-
-    public Vector3d localPointToWorld(Vector3dc localPoint, Vector3dc origin, Vector3d dest) {
-        Objects.requireNonNull(origin, "origin");
-        requireFinite(origin, "origin");
-        localToWorld(localPoint, dest);
-        return dest.add(origin);
-    }
-
-    private static void requireUnit(Vector3dc vector, String name) {
+    private static void requireUnit(Vec3d vector, String name) {
         double lengthSquared = vector.lengthSquared();
-        if (Math.abs(lengthSquared - 1.0D) > GeometryTolerance.ORTHONORMAL) {
-            throw new IllegalArgumentException(name + " must have unit length: " + vector);
+        if (!Double.isFinite(lengthSquared)
+                || Math.abs(lengthSquared - 1.0D)
+                > GeometryTolerance.ORTHONORMAL) {
+            throw new IllegalArgumentException(
+                    name + " must have unit length: " + vector);
         }
     }
 
@@ -240,8 +365,8 @@ public final class OrthonormalFrame3d {
     }
 
     private static void requireOrthogonal(
-            Vector3dc first,
-            Vector3dc second,
+            Vec3d first,
+            Vec3d second,
             String firstName,
             String secondName
     ) {
@@ -258,7 +383,8 @@ public final class OrthonormalFrame3d {
             String firstName,
             String secondName
     ) {
-        if (Math.abs(ax * bx + ay * by + az * bz) > GeometryTolerance.ORTHONORMAL) {
+        if (Math.abs(ax * bx + ay * by + az * bz)
+                > GeometryTolerance.ORTHONORMAL) {
             throw new IllegalArgumentException(
                     firstName + " and " + secondName + " must be orthogonal"
             );
@@ -266,7 +392,7 @@ public final class OrthonormalFrame3d {
     }
 
     /**
-     * Rejects reflected orthonormal bases (determinant -1).  Only proper
+     * Rejects reflected orthonormal bases (determinant -1). Only proper
      * rotations are representable as quaternions, so a frame must satisfy
      * {@code det = X dot (Y cross Z) = +1} within the same
      * {@link GeometryTolerance#ORTHONORMAL} band used for unit length and
@@ -295,10 +421,8 @@ public final class OrthonormalFrame3d {
         }
     }
 
-    static void requireFinite(Vector3dc vector, String name) {
-        if (!Double.isFinite(vector.x())
-                || !Double.isFinite(vector.y())
-                || !Double.isFinite(vector.z())) {
+    static void requireFinite(Vec3d vector, String name) {
+        if (!vector.isFinite()) {
             throw new IllegalArgumentException(name + " must be finite: " + vector);
         }
     }

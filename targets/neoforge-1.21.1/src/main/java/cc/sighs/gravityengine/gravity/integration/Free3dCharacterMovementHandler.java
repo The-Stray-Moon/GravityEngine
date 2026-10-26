@@ -1,15 +1,17 @@
 package cc.sighs.gravityengine.gravity.integration;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeOwnership;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityLivingAccess;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.movement.CharacterControlBasis;
 import cc.sighs.gravityengine.gravity.movement.CharacterMovementBasis;
 import cc.sighs.gravityengine.look.SemanticLookSnapshot;
+import cc.sighs.gravityengine.math.Quatd;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Quaterniond;
 
 /**
  * Full 3D character propulsion.
@@ -26,7 +28,7 @@ public final class Free3dCharacterMovementHandler {
         CharacterControlBasis basisKind =
                 context.characterPlan().movementBasis();
 
-        Quaterniond acceptedBody =
+        Quatd acceptedBody =
                 acceptedBodyIfRequired(entity, basisKind);
         SemanticLookSnapshot look =
                 context.look();
@@ -40,20 +42,24 @@ public final class Free3dCharacterMovementHandler {
                 acceptedBody
         );
 
-        Vec3 propulsion = basis.propulsion(
-                context.input(),
+        Vec3d propulsion = basis.propulsion(
+                MinecraftMathAdapter.toVec3d(context.input()),
                 GravityLivingAccess.cast(entity).gravityengine$getFlyingSpeed()
         );
 
-        Vec3 request = entity.getDeltaMovement().add(propulsion);
+        Vec3 request = MinecraftMathAdapter.toMinecraft(
+                MinecraftMathAdapter.toVec3d(
+                                entity.getDeltaMovement())
+                        .add(propulsion));
 
         if (context.capturePlan() != null
-                && !context.capturePlan().covers(request)) {
+                && !context.capturePlan().coversActorMovement(
+                        MinecraftMathAdapter.toVec3d(request))) {
             entity.calculateEntityAnimation(false);
             return;
         }
 
-        context.runtime().recordSelfWalk(
+        context.operationState().recordSelfWalk(
                 entity.level().getGameTime(),
                 propulsion
         );
@@ -61,29 +67,35 @@ public final class Free3dCharacterMovementHandler {
         entity.setDeltaMovement(request);
         entity.move(MoverType.SELF, request);
 
-        Vec3 accelerated = entity.getDeltaMovement().add(
-                entity.isNoGravity()
-                        ? Vec3.ZERO
-                        : context.sample().accelerationVector()
-        );
+        Vec3d accelerated = MinecraftMathAdapter.toVec3d(
+                        entity.getDeltaMovement())
+                .add(
+                        entity.isNoGravity()
+                                ? Vec3d.ZERO
+                                : context.sample().accelerationVector()
+                );
 
-        Vec3 constrained = constrain(context, accelerated);
+        Vec3 constrained = constrain(
+                context,
+                MinecraftMathAdapter.toMinecraft(accelerated));
 
-        Vec3 local = frame.worldToLocal(constrained);
+        Vec3d local = frame.worldToLocal(
+                MinecraftMathAdapter.toVec3d(constrained));
         Vec3 dragged =
                 GravityLivingAccess.cast(entity).gravityengine$shouldDiscardFriction()
                         ? constrained
-                        : frame.localToWorld(new Vec3(
-                        local.x * 0.91F,
-                        local.y * 0.98F,
-                        local.z * 0.91F
-                ));
+                        : MinecraftMathAdapter.toMinecraft(
+                                frame.localToWorld(new Vec3d(
+                                        local.x() * 0.91F,
+                                        local.y() * 0.98F,
+                                        local.z() * 0.91F
+                                )));
 
         entity.setDeltaMovement(constrain(context, dragged));
         entity.calculateEntityAnimation(false);
     }
 
-    private static Quaterniond acceptedBodyIfRequired(
+    private static Quatd acceptedBodyIfRequired(
             LivingEntity entity,
             CharacterControlBasis basis
     ) {
@@ -119,7 +131,7 @@ public final class Free3dCharacterMovementHandler {
             GravityTravelContext context,
             Vec3 velocity
     ) {
-        var result = context.runtime().currentMoveResult();
+        var result = context.operationState().currentMoveResult();
 
         if (!ContactVelocityIntegration
                 .tangentVelocityResponseAllowed(result)) {
@@ -135,6 +147,6 @@ public final class Free3dCharacterMovementHandler {
 
         ContactVelocityIntegration.logVelocityFallback(
                 context.entity(), result, resolution, "free3d");
-        return resolution.velocity();
+        return MinecraftMathAdapter.toMinecraft(resolution.velocity());
     }
 }

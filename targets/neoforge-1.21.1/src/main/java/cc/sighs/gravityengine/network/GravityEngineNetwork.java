@@ -26,23 +26,40 @@ public final class GravityEngineNetwork {
          * handoff, and do not wrap handlers in enqueueWork: that would queue a
          * second, redundant dispatch from the MAIN thread.
          */
-        PayloadRegistrar registrar = event.registrar("18");
+        /*
+         * 20: body-attitude wire layout changed. The config payload now
+         * publishes torque/inertia/damping instead of acceleration and rate
+         * caps, and the state payloads carry the durable world-space angular
+         * momentum plus its isotropic effective inertia (or an explicit
+         * pose-only handoff) alongside the owned quaternions.
+         *
+         * 21: the body commit payload separates an authorized commit mode
+         * (correction / observer / metadata-only native application /
+         * representation reconciliation) from the installed body
+         * representation, so a synchronization request no longer decodes as a
+         * physical relocation.
+         */
+        /*
+         * 23: removes the synthetic entity-lifetime binding payload. NeoForge
+         * already orders entity spawn/pairing before StartTracking and player
+         * replacement before the login/respawn hooks, so fresh synchronization
+         * from those native boundaries is sufficient and the client refuses
+         * snapshots whose entity identity is absent or mismatched.
+         */
+        // 25: complete body transactions replace metadata/representation modes and resync requests.
+        // 26: server-owned relocation distinguishes geometry adjustment from momentum correction.
+        // 27: installed collision axis is independent of the complete reference frame.
+        // 28: native player moves echo the body epoch captured before prediction.
+        PayloadRegistrar registrar = event.registrar("29");
+        registrar.playToServer(ServerboundPlayerMovePayload.TYPE, ServerboundPlayerMovePayload.STREAM_CODEC,
+                (payload, context) -> {
+                    if (context.player() instanceof ServerPlayer player) ServerPlayerMovementReceiver.receive(player, payload);
+                });
 
         /*
          * Payload type/codec registration is common. Only the implementation
          * reached after logical-client delivery is physical-client owned.
          */
-        registrar.playToServer(
-                ServerboundPlayerBodyResyncPayload.TYPE,
-                ServerboundPlayerBodyResyncPayload.STREAM_CODEC,
-                (payload, context) -> {
-                    if (context.player() instanceof ServerPlayer player) {
-                        cc.sighs.gravityengine.gravity.integration.geometry.PlayerBodyHandoff
-                                .requestResync(player);
-                    }
-                }
-        );
-
         registrar.playToClient(
                 ClientboundPlayerBodyCommitPayload.TYPE,
                 ClientboundPlayerBodyCommitPayload.STREAM_CODEC,
@@ -91,7 +108,7 @@ public final class GravityEngineNetwork {
                         )
         );
 
-        LOGGER.info("Registered gravity and body-attitude state payloads with protocol 18; body commits envelope Vanilla teleports, ordinary player movement remains Vanilla");
+        LOGGER.info("Registered gravity and body-attitude state payloads with protocol 29 (strict ballistic snapshot fields)");
     }
 
 }

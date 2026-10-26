@@ -108,7 +108,10 @@ public abstract class LivingEntityMixin implements GravityLivingAccess {
             float movementAmount,
             Operation<Float> original
     ) {
-        if (!PlayerLookIntegration.usesGravityEngineLook(instance)) {
+        // ArmorStand.tickHeadTurn locks its authored yaw and returns no walk animation.
+        // Passive displacement must not turn the decoration as if it were walking.
+        if (instance instanceof net.minecraft.world.entity.decoration.ArmorStand
+                || !PlayerLookIntegration.usesGravityEngineLook(instance)) {
             return original.call(instance, targetBodyYaw, movementAmount);
         }
         /*
@@ -120,7 +123,9 @@ public abstract class LivingEntityMixin implements GravityLivingAccess {
                 GravityFrameAccess.authoritativeFrame(instance);
         SemanticLookSnapshot look =
                 PlayerLookIntegration.capture(instance, frame);
-        Vec3 semanticViewForward = look.forward();
+        Vec3 semanticViewForward =
+                cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter
+                        .toMinecraft(look.forward());
         GravityBodyTurnMath.BodyTurnInput corrected =
                 GravityBodyTurnMath.resolve(
                         instance,
@@ -140,16 +145,6 @@ public abstract class LivingEntityMixin implements GravityLivingAccess {
         instance.yBodyRot = step.bodyYaw();
         return step.animationStep();
     }
-
-    /*
-     * No custom jump-gate wrapper exists here: the vanilla jump gate reads
-     * entity.onGround(), and for custom gravity onGround comes from the
-     * current move's blocked-down / bottom-probe result.
-     *
-     * TODO(P3-gameplay-coyote):
-     * Optional gameplay coyote time may be implemented above the collision
-     * layer. It must never redefine physical ground or modify collision state.
-     */
 
     @Override public float gravityengine$getJumpPower() { return this.getJumpPower(); }
     @Override public float gravityengine$getFrictionInfluencedSpeed(float friction) { return this.getFrictionInfluencedSpeed(friction); }

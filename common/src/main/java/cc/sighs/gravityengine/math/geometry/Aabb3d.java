@@ -1,8 +1,6 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -27,29 +25,28 @@ public record Aabb3d(
         }
     }
 
-    public Vector3d center(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(
+    public Vec3d center() {
+        return new Vec3d(
                 (this.minX + this.maxX) * 0.5D,
                 (this.minY + this.maxY) * 0.5D,
                 (this.minZ + this.maxZ) * 0.5D
         );
     }
 
-    /** Fresh center convenience copy. */
-    public Vector3d center() {
-        return center(new Vector3d());
-    }
-
-    public Vector3d size(Vector3d dest) {
-        return Objects.requireNonNull(dest, "dest").set(
+    public Vec3d size() {
+        return new Vec3d(
                 this.maxX - this.minX,
                 this.maxY - this.minY,
                 this.maxZ - this.minZ
         );
     }
 
-    public Vector3d halfExtents(Vector3d dest) {
-        return size(dest).mul(0.5D);
+    public Vec3d halfExtents() {
+        return new Vec3d(
+                (this.maxX - this.minX) * 0.5D,
+                (this.maxY - this.minY) * 0.5D,
+                (this.maxZ - this.minZ) * 0.5D
+        );
     }
 
     public boolean intersects(Aabb3d other) {
@@ -59,7 +56,7 @@ public record Aabb3d(
                 && this.maxZ >= other.minZ && other.maxZ >= this.minZ;
     }
 
-    public boolean contains(Vector3dc point) {
+    public boolean contains(Vec3d point) {
         Objects.requireNonNull(point, "point");
         OrthonormalFrame3d.requireFinite(point, "point");
         return point.x() >= this.minX && point.x() <= this.maxX
@@ -75,7 +72,7 @@ public record Aabb3d(
         );
     }
 
-    public Aabb3d translated(Vector3dc displacement) {
+    public Aabb3d translated(Vec3d displacement) {
         Objects.requireNonNull(displacement, "displacement");
         OrthonormalFrame3d.requireFinite(displacement, "displacement");
         return new Aabb3d(
@@ -95,7 +92,7 @@ public record Aabb3d(
      * component.  This is the pure equivalent of Minecraft's
      * {@code expandTowards} and stays inside the neutral geometry layer.
      */
-    public Aabb3d expandTowards(Vector3dc displacement) {
+    public Aabb3d expandTowards(Vec3d displacement) {
         Objects.requireNonNull(displacement, "displacement");
         OrthonormalFrame3d.requireFinite(displacement, "displacement");
         double dx = displacement.x();
@@ -111,7 +108,7 @@ public record Aabb3d(
         );
     }
 
-    public Aabb3d move(Vector3dc displacement) {
+    public Aabb3d move(Vec3d displacement) {
         return translated(displacement);
     }
 

@@ -45,8 +45,6 @@ public final class ClientboundPayloadDispatch {
         requireInstalled().handleGravitySync(payload);
     }
 
-
-
     static void handleBodyAttitudeState(
             ClientboundBodyAttitudeStatePayload payload
     ) {
@@ -76,8 +74,6 @@ public final class ClientboundPayloadDispatch {
         }
         void handleGravitySync(SyncGravityStatePayload payload);
 
-
-
         void handleBodyAttitudeState(
                 ClientboundBodyAttitudeStatePayload payload
         );
@@ -90,8 +86,6 @@ public final class ClientboundPayloadDispatch {
         public void handleGravitySync(SyncGravityStatePayload payload) {
             throw uninstalled();
         }
-
-
 
         @Override
         public void handleBodyAttitudeState(

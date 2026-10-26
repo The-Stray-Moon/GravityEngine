@@ -3,7 +3,6 @@ package cc.sighs.gravityengine.mixin;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorBridge;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorSnapshot;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaTargetingBridge;
-
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import net.minecraft.world.entity.player.Player;

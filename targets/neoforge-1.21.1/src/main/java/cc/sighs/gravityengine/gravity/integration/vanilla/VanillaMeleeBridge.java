@@ -1,17 +1,17 @@
 package cc.sighs.gravityengine.gravity.integration.vanilla;
 
-import net.neoforged.neoforge.common.CommonHooks;
-import net.minecraft.world.entity.LivingEntity;
-import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
-import cc.sighs.gravityengine.gravity.integration.MovementProvenanceIntegration;
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
 import cc.sighs.gravityengine.gravity.GravityFrame;
-import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
-import java.util.Objects;
-import net.minecraft.world.entity.Entity;
+import cc.sighs.gravityengine.gravity.integration.MovementProvenanceIntegration;
+import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.common.CommonHooks;
 
-import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import java.util.Objects;
 
 /**
  * Close-combat response bridge: reference-tangent melee heading, attack sweep
@@ -37,17 +37,29 @@ public final class VanillaMeleeBridge {
             VanillaActorSnapshot actor
     ) {
         Objects.requireNonNull(actor, "actor");
-        Vec3 up = actor.referenceUp();
-        Vec3 heading = AttitudeSpaceTransform.projectedUnit(
-                actor.viewForward(), up, TANGENT_EPSILON);
+        Vec3d up = MinecraftMathAdapter.toVec3d(
+                actor.referenceUp()
+        );
+        Vec3d heading = AttitudeSpaceTransform.projectedUnit(
+                MinecraftMathAdapter.toVec3d(
+                        actor.viewForward()
+                ),
+                up,
+                TANGENT_EPSILON
+        );
         if (heading == null) {
             heading = AttitudeSpaceTransform.projectedUnit(
-                    actor.zeroPitchHeading(), up, TANGENT_EPSILON);
+                    MinecraftMathAdapter.toVec3d(
+                            actor.zeroPitchHeading()
+                    ),
+                    up,
+                    TANGENT_EPSILON
+            );
         }
         if (heading == null) {
             heading = actor.referenceFrame().forward();
         }
-        return heading;
+        return MinecraftMathAdapter.toMinecraft(heading);
     }
 
     /**
@@ -103,11 +115,14 @@ public final class VanillaMeleeBridge {
     private static Vec3 meleeEventCarrier(
             VanillaActorSnapshot attacker
     ) {
-        return attacker.referenceFrame()
-                .worldToLocal(
-                        meleeWorldDirection(attacker)
-                                .reverse()
-                );
+        return MinecraftMathAdapter.toMinecraft(
+                attacker.referenceFrame()
+                        .worldToLocal(
+                                MinecraftMathAdapter.toVec3d(
+                                        meleeWorldDirection(attacker)
+                                )
+                        )
+        );
     }
 
     private static void applyPlayerKnockback(LivingEntity target, VanillaActorSnapshot attacker,
@@ -133,10 +148,24 @@ public final class VanillaMeleeBridge {
             eventZ = (Math.random() - Math.random()) * 0.01D;
         }
         Vec3 before = target.getDeltaMovement();
-        Vec3 pushDirection = attacker.referenceFrame().localToWorld(
-                new Vec3(eventX, 0, eventZ).normalize()).reverse();
+        Vec3 pushDirection =
+                MinecraftMathAdapter.toMinecraft(
+                        attacker.referenceFrame()
+                                .localToWorld(
+                                        MinecraftMathAdapter.toVec3d(
+                                                new Vec3(
+                                                        eventX,
+                                                        0.0D,
+                                                        eventZ
+                                                ).normalize()
+                                        )
+                                )
+                ).reverse();
         GravityFrame frame = targetFrame;
-        Vec3 up = frame.up();
+        Vec3 up =
+                MinecraftMathAdapter.toMinecraft(
+                        frame.up()
+                );
         double upBefore = before.dot(up);
         Vec3 tangentBefore = before.subtract(
                 up.scale(upBefore));

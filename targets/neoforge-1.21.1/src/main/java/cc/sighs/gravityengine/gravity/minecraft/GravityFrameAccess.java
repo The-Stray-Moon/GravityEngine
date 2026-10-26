@@ -5,7 +5,8 @@ import cc.sighs.gravityengine.gravity.GravityState;
 import cc.sighs.gravityengine.gravity.collision.GravityMoveResult;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
-import cc.sighs.gravityengine.gravity.runtime.GravityRuntimeState;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
+import cc.sighs.gravityengine.gravity.runtime.GravityOperationState;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 
@@ -14,9 +15,10 @@ import java.util.Objects;
 /**
  * Minecraft-facing frame access seam.
  *
- * <p>{@link #authoritativeFrame(Entity)} resolves the authoritative gameplay
- * frame from the entity-owned component/runtime state and is the single entry
- * that other target code should use for that policy.
+ * <p>{@link #authoritativeFrame(Entity)} resolves the environmental/control
+ * reference from the entity-owned component/runtime state.
+ * {@link #installedLocomotionFrame(Entity)} derives collision/support operands
+ * around installed geometry without changing that reference.
  * {@link #reliableFrame(Entity)} only looks up an already-owned transaction
  * frame for diagnostics. Neither method samples gravity and neither resamples
  * an active operation.</p>
@@ -29,19 +31,20 @@ public final class GravityFrameAccess {
         var component = GravityEntityAccess.cast(entity)
                 .gravityengine$gravityComponent();
         return resolve(
-                component.runtime(),
-                component.appliedState(),
+                component.operationState(),
+                component.state().hasActiveGravityReference(),
+                component.state().appliedState(),
                 GravityEntityGeometry.proxyCenter(entity)
         );
     }
 
     /**
-     * Resolves operation evidence against the installed collision axis without
-     * resampling gravity. An active move owns its frame; otherwise the last
-     * completed frame is re-expressed on the installed axis.
+     * Resolves environmental evidence without resampling gravity or consulting
+     * collision orientation. An active move owns its captured reference.
      */
     private static GravityFrame resolve(
-            GravityRuntimeState runtime,
+            GravityOperationState runtime,
+            boolean referenceActive,
             GravityState initialState,
             Vec3 initialSamplePoint
     ) {
@@ -49,15 +52,47 @@ public final class GravityFrameAccess {
         Objects.requireNonNull(initialState, "initialState");
         Objects.requireNonNull(initialSamplePoint, "initialSamplePoint");
 
-        if (runtime.isInMove()) return runtime.activeFrame();
+        if (runtime.isInMove()) return runtime.activeReferenceFrame();
 
         GravityFrame evidence = runtime.lastCompletedFrame();
         if (evidence == null) {
-            evidence = GravityFrame.fromState(initialState, initialSamplePoint);
+            evidence = GravityFrame.fromState(
+                    initialState,
+                    MinecraftMathAdapter.toVec3d(
+                            initialSamplePoint
+                    )
+            );
+        } else if (referenceActive) {
+            /*
+             * The environmental reference remains under the same authority.
+             * Re-resolve the current state but transport the previous tangent
+             * gauge; a non-canonical basis must not flip merely because the
+             * committed state was republished or a body fallback occurred.
+             */
+            evidence = GravityFrame.fromState(
+                    initialState,
+                    MinecraftMathAdapter.toVec3d(
+                            initialSamplePoint
+                    ),
+                    evidence
+            );
+        } else {
+            evidence = GravityFrame.fromState(
+                    initialState,
+                    MinecraftMathAdapter.toVec3d(
+                            initialSamplePoint
+                    )
+            );
         }
-        return runtime.installedCollisionUp() == null
-                ? evidence
-                : runtime.frameForInstalledAxis(evidence);
+        return evidence;
+    }
+
+    /** Collision/support operand derived from installed geometry, never a reference publication. */
+    public static GravityFrame installedLocomotionFrame(Entity entity) {
+        var runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState();
+        if (runtime.isInMove()) return runtime.activeFrame();
+        GravityFrame reference = authoritativeFrame(entity);
+        return runtime.installedCollisionUp() == null ? reference : runtime.frameForInstalledAxis(reference);
     }
 
     /**
@@ -71,9 +106,9 @@ public final class GravityFrameAccess {
      */
     public static GravityFrame reliableFrame(Entity entity) {
         Objects.requireNonNull(entity, "entity");
-        GravityRuntimeState runtime = GravityEntityAccess.cast(entity)
+        GravityOperationState runtime = GravityEntityAccess.cast(entity)
                 .gravityengine$gravityComponent()
-                .runtime();
+                .operationState();
         GravityMoveResult result = runtime.currentMoveResult();
         if (result != null) return result.frame();
         if (runtime.isInMove()) return runtime.activeFrame();

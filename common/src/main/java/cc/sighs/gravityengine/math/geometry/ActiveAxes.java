@@ -1,9 +1,7 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Vector3d;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Arrays;
-import java.util.Objects;
 
 /** Immutable bounded storage for cotemporal SAT normals in candidate-axis order. */
 public final class ActiveAxes {
@@ -34,11 +32,10 @@ public final class ActiveAxes {
         return this.axisIndices[index];
     }
 
-    public Vector3d normal(int index, Vector3d dest) {
-        Objects.requireNonNull(dest, "dest");
+    public Vec3d normal(int index) {
         if (index < 0 || index >= size()) throw new IndexOutOfBoundsException(index);
         int offset = index * 3;
-        return dest.set(
+        return new Vec3d(
                 this.normals[offset],
                 this.normals[offset + 1],
                 this.normals[offset + 2]

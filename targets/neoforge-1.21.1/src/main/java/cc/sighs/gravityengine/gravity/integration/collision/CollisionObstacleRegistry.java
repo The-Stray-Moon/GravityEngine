@@ -1,13 +1,13 @@
 package cc.sighs.gravityengine.gravity.integration.collision;
 
 import cc.sighs.gravityengine.gravity.collision.CollisionObstacle;
-import cc.sighs.gravityengine.gravity.collision.MinecraftGeometryAdapter;
 import cc.sighs.gravityengine.gravity.collision.SphereObstacle;
+import cc.sighs.gravityengine.gravity.minecraft.collision.MinecraftCollisionGeometryAdapter;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.math.geometry.Aabb3d;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
-
 import java.util.*;
 
 /**
@@ -84,7 +84,7 @@ public final class CollisionObstacleRegistry {
     public RegisteredSphereQuery query(AABB searchBox) {
         Objects.requireNonNull(searchBox, "searchBox");
         Aabb3d neutral =
-                MinecraftGeometryAdapter.toAabb3d(searchBox);
+                MinecraftCollisionGeometryAdapter.toAabb3d(searchBox);
         List<RegisteredSphere> found = new ArrayList<>();
         synchronized (this) {
             for (Map.Entry<BlockPos, SphereObstacle> entry
@@ -111,7 +111,13 @@ public final class CollisionObstacleRegistry {
                 return geometric;
             }
             return CollisionObstacle.compareBlockPos(
-                    left.position(), right.position());
+                    MinecraftMathAdapter.toCellPos(
+                            left.position()
+                    ),
+                    MinecraftMathAdapter.toCellPos(
+                            right.position()
+                    )
+            );
         });
         List<SphereObstacle> ordered = new ArrayList<>(found.size());
         List<BlockPos> orderedPositions = new ArrayList<>(found.size());

@@ -1,7 +1,6 @@
 package cc.sighs.gravityengine.gravity.collision.geometry;
 
-import org.joml.Vector3d;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /**
@@ -13,8 +12,8 @@ import java.util.Objects;
  */
 public record SphereObbSweepHit(
         double timeOfImpact,
-        Vector3d normalFromSphereToBox,
-        Vector3d contactPoint
+        Vec3d normalFromSphereToBox,
+        Vec3d contactPoint
 ) {
     private static final double NORMAL_EPSILON = 1.0E-6D;
 
@@ -35,24 +34,10 @@ public record SphereObbSweepHit(
             throw new IllegalArgumentException(
                     "normal must be normalized: " + normalFromSphereToBox);
         }
-        normalFromSphereToBox = new Vector3d(normalFromSphereToBox);
-        contactPoint = new Vector3d(contactPoint);
     }
 
-    @Override
-    public Vector3d normalFromSphereToBox() {
-        return new Vector3d(normalFromSphereToBox);
-    }
-
-    @Override
-    public Vector3d contactPoint() {
-        return new Vector3d(contactPoint);
-    }
-
-    private static void requireFinite(Vector3d vector, String name) {
-        if (!Double.isFinite(vector.x)
-                || !Double.isFinite(vector.y)
-                || !Double.isFinite(vector.z)) {
+    private static void requireFinite(Vec3d vector, String name) {
+        if (!vector.isFinite()) {
             throw new IllegalArgumentException(
                     name + " must be finite: " + vector);
         }

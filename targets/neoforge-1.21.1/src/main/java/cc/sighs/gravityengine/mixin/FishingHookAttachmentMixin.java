@@ -1,6 +1,6 @@
 package cc.sighs.gravityengine.mixin;
 
-
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.world.entity.Entity;
@@ -8,7 +8,6 @@ import net.minecraft.world.entity.projectile.FishingHook;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
 
 /**
  * FishingHook entity-attachment spatial bridge (21.1.249).

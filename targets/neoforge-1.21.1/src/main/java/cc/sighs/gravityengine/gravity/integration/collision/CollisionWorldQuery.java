@@ -1,6 +1,12 @@
 package cc.sighs.gravityengine.gravity.integration.collision;
 
-import cc.sighs.gravityengine.gravity.collision.*;
+import cc.sighs.gravityengine.gravity.collision.BlockObstacle;
+import cc.sighs.gravityengine.gravity.collision.CapturedCollisionScene;
+import cc.sighs.gravityengine.gravity.collision.CollisionComplexityLimitException;
+import cc.sighs.gravityengine.gravity.collision.CollisionObstacle;
+import cc.sighs.gravityengine.gravity.collision.CollisionWorkTracker;
+import cc.sighs.gravityengine.gravity.minecraft.collision.MinecraftCollisionGeometryAdapter;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -37,24 +43,29 @@ final class CollisionWorldQuery {
             BlockPos position,
             List<BlockObstacle> built
     ) {
-        if (shape.isEmpty()) return;
+        if (shape.isEmpty()) {
+            return;
+        }
+
         try {
             shape.forAllBoxes((minX, minY, minZ, maxX, maxY, maxZ) -> {
                 if (enforcePrimitiveBudget && !tracker.recordObstacles(1)) {
                     throw PrimitiveEnumerationAbort.INSTANCE;
                 }
+
                 built.add(new BlockObstacle(
-                        position,
-                        MinecraftGeometryAdapter.toAabb3d(
+                        MinecraftMathAdapter.toCellPos(position),
+                        MinecraftCollisionGeometryAdapter.toAabb3d(
                                 new AABB(
                                         minX, minY, minZ,
-                                        maxX, maxY, maxZ)
-                                        .move(position))
+                                        maxX, maxY, maxZ
+                                ).move(position)
+                        )
                 ));
             });
         } catch (PrimitiveEnumerationAbort aborted) {
-            // Budget exhausted: the tracker already flagged the limit and
-            // recorded its reason. Do not swallow any other exception type.
+            // The tracker already records budget exhaustion.
+            // Other exceptions must propagate.
         }
     }
 

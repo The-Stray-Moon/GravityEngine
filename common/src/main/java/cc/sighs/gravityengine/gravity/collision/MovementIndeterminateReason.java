@@ -31,5 +31,6 @@ public enum MovementIndeterminateReason {
     ADVANCE_INFEASIBLE,
     ADVANCE_NO_PROGRESS,
     ADVANCE_BUMP_LIMIT,
+    SUPPORT_TRAJECTORY_BUDGET,
     OTHER
 }

@@ -20,6 +20,7 @@ package cc.sighs.gravityengine.gravity.collision;
  * genuine programmer/invariant bug and must never be swallowed.</p>
  */
 public final class CollisionComplexityLimitException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
     public CollisionComplexityLimitException(String message) {
         super(message);
     }

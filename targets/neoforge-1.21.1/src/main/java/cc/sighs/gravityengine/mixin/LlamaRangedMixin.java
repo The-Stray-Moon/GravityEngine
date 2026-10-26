@@ -1,6 +1,9 @@
 package cc.sighs.gravityengine.mixin;
 
-import cc.sighs.gravityengine.gravity.integration.vanilla.*;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorBridge;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorSnapshot;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.AimOperands;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
@@ -15,9 +18,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge.AimOperands;
-import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaProjectileBridge;
-
 
 /** 21.1.249 Llama: target one-third body height; X/Z source is llama feet, Y source is spit. No velocity lead; muzzle yaw offset must not shift the tangent aim source. Vanilla computes XZ distance * (double)0.2F and owns speed/inaccuracy. */
 @Mixin(Llama.class)

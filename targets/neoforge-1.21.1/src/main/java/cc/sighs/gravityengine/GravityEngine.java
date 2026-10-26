@@ -15,6 +15,7 @@ public final class GravityEngine {
     public static final String MOD_ID = "gravityengine";
 
     public GravityEngine(IEventBus modEventBus, ModContainer modContainer) {
+        cc.sighs.gravityengine.gravity.debug.DebugStartup.report();
         modEventBus.addListener(this::registerPayloads);
 
         GravityEngineAttachments.ATTACHMENTS.register(modEventBus);

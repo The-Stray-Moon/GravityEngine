@@ -31,7 +31,7 @@ public abstract class EntityBlockSpeedMixin {
     private boolean gravityengine$capturedSpeed() {
         var entity = (Entity) (Object) this;
         return GravityInfluencePolicy.usesCustomCollision(entity)
-                && GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime().isInMove();
+                && GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState().isInMove();
     }
 
     @WrapMethod(method = "getBlockSpeedFactor")
@@ -61,18 +61,22 @@ public abstract class EntityBlockSpeedMixin {
     private BlockState gravityengine$support(Level level, BlockPos pos, Operation<BlockState> original,
             @Share("material") LocalRef<BlockMovementMaterialSnapshot> material) {
         if (!gravityengine$capturedSpeed()) return original.call(level, pos);
-        var support = GravityEntityAccess.cast((Entity) (Object) this).gravityengine$getVanillaSupportingBlock();
-        if (support.isPresent()) return gravityengine$material(support.get(), material);
-        material.set(BlockMovementMaterialSnapshot.AIR);
+        material.set(cc.sighs.gravityengine.gravity.integration.BlockContactResolver.supportMaterial((Entity)(Object)this));
         return Blocks.AIR.defaultBlockState();
     }
 
     @Unique
     private BlockState gravityengine$material(BlockPos pos, LocalRef<BlockMovementMaterialSnapshot> captured) {
-        var runtime = GravityEntityAccess.cast((Entity) (Object) this).gravityengine$gravityComponent().runtime();
+        var runtime = GravityEntityAccess.cast((Entity) (Object) this).gravityengine$gravityComponent().operationState();
         var operation = runtime.collisionOperation();
         if (operation == null) throw new IllegalStateException("movement material requires an operation scene");
-        var material = operation.scene().movementMaterialAt(pos).orElse(BlockMovementMaterialSnapshot.AIR);
+        var material = operation.scene()
+                .movementMaterialAt(
+                        cc.sighs.gravityengine.gravity.minecraft.math
+                                .MinecraftMathAdapter
+                                .toCellPos(pos)
+                )
+                .orElse(BlockMovementMaterialSnapshot.AIR);
         captured.set(material);
         return (material.water() ? Blocks.WATER : material.bubbleColumn() ? Blocks.BUBBLE_COLUMN : Blocks.AIR)
                 .defaultBlockState();

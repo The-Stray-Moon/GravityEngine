@@ -33,7 +33,19 @@ public final class PlayerPhysicalLoadBootstrap {
             ServerPlayer player
     ) {
         Objects.requireNonNull(player, "player");
+        if (player.isRemoved()) return false;
+        return cc.sighs.gravityengine.gravity.integration.geometry.PlayerBodyHandoff
+                .withAuthority(
+                        player,
+                        () -> bootstrapLoadedPlayerAuthorized(
+                                player
+                        )
+                );
+    }
 
+    private static boolean bootstrapLoadedPlayerAuthorized(
+            ServerPlayer player
+    ) {
         /*
          * Force creation of the persistence attachment so future player.dat
          * saves always have a persistence slot even for a newly-created
@@ -52,7 +64,7 @@ public final class PlayerPhysicalLoadBootstrap {
          * Keep the retry boundary alive until the complete player physical load
          * transaction succeeds, not merely until gravity application succeeds.
          */
-        component.markApplicationBootstrapPending();
+        component.state().markApplicationBootstrapPending();
 
         /*
          * Load-time input reconstruction is state-only:
@@ -106,7 +118,12 @@ public final class PlayerPhysicalLoadBootstrap {
         try {
             BodyAttitudeStreamEpochService
                     .beginFreshServerStreamPreservingContinuity(player);
-            GravitySyncService.syncPlayer(player);
+            GravitySyncService.syncTracking(player);
+            // Login/replacement is an immediate native pairing boundary. A
+            // retry inside the connection transaction joins its final publish.
+            if (!cc.sighs.gravityengine.gravity.integration.geometry.BodyCommitTransaction.isActive(player)) {
+                GravitySyncService.syncPlayer(player);
+            }
             BodyAttitudeReplicationService.syncSelf(player);
         } catch (RuntimeException failure) {
             /*
@@ -126,7 +143,7 @@ public final class PlayerPhysicalLoadBootstrap {
          * synchronization. If either synchronization throws, the next retry
          * re-enters the same high-level owner.
          */
-        component.clearApplicationBootstrapPending();
+        component.state().clearApplicationBootstrapPending();
 
         return true;
     }

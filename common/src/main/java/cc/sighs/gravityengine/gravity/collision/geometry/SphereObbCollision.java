@@ -1,12 +1,11 @@
 package cc.sighs.gravityengine.gravity.collision.geometry;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.math.geometry.Obb3d;
-import cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d;
 import cc.sighs.gravityengine.math.geometry.Sphere3d;
-import org.joml.Vector3d;
-import org.joml.Vector3dc;
-
-import java.util.*;
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Pure sphere/OBB collision kernel.
@@ -37,16 +36,25 @@ public final class SphereObbCollision {
     public static double signedDistance(Sphere3d sphere, Obb3d box) {
         Objects.requireNonNull(sphere, "sphere");
         Objects.requireNonNull(box, "box");
-        Vector3d closest = closestPointOnBox(box, sphere.center(), new Vector3d());
-        Vector3d offset = new Vector3d(sphere.center()).sub(closest);
-        double distSq = offset.lengthSquared();
+        Vec3d center = sphere.center();
+        double halfX = box.halfX();
+        double halfY = box.halfY();
+        double halfZ = box.halfZ();
+        Vec3d local = box.worldPointToLocal(center);
+        double closestX = clamp(local.x(), -halfX, halfX);
+        double closestY = clamp(local.y(), -halfY, halfY);
+        double closestZ = clamp(local.z(), -halfZ, halfZ);
+        Vec3d closest = box.localPointToWorld(closestX, closestY, closestZ);
+        double offsetX = center.x() - closest.x();
+        double offsetY = center.y() - closest.y();
+        double offsetZ = center.z() - closest.z();
+        double distSq = offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
         if (distSq < DISTANCE_EPSILON) {
-            Vector3d local = localPoint(box, sphere.center(), new Vector3d());
             double nearestFaceDist = Math.min(
-                    halfX(box) - Math.abs(local.x),
+                    halfX - Math.abs(local.x()),
                     Math.min(
-                            halfY(box) - Math.abs(local.y),
-                            halfZ(box) - Math.abs(local.z)));
+                            halfY - Math.abs(local.y()),
+                            halfZ - Math.abs(local.z())));
             return -(nearestFaceDist + sphere.radius());
         }
         return Math.sqrt(distSq) - sphere.radius();
@@ -55,86 +63,132 @@ public final class SphereObbCollision {
     public static boolean intersects(Sphere3d sphere, Obb3d box) {
         Objects.requireNonNull(sphere, "sphere");
         Objects.requireNonNull(box, "box");
-        Vector3d closest = closestPointOnBox(box, sphere.center(), new Vector3d());
-        Vector3d offset = new Vector3d(sphere.center()).sub(closest);
-        return offset.lengthSquared() <= sphere.radius() * sphere.radius();
+        Vec3d center = sphere.center();
+        double halfX = box.halfX();
+        double halfY = box.halfY();
+        double halfZ = box.halfZ();
+        Vec3d local = box.worldPointToLocal(center);
+        Vec3d closest = box.localPointToWorld(
+                clamp(local.x(), -halfX, halfX),
+                clamp(local.y(), -halfY, halfY),
+                clamp(local.z(), -halfZ, halfZ)
+        );
+        double offsetX = center.x() - closest.x();
+        double offsetY = center.y() - closest.y();
+        double offsetZ = center.z() - closest.z();
+        return offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ
+                <= sphere.radius() * sphere.radius();
     }
 
     /** Closest point on the OBB surface/interior to a world point. */
-    public static Vector3d closestPointOnBox(
+    public static Vec3d closestPointOnBox(
             Obb3d box,
-            Vector3dc worldPoint,
-            Vector3d dest
+            Vec3d worldPoint
     ) {
         Objects.requireNonNull(box, "box");
         Objects.requireNonNull(worldPoint, "worldPoint");
-        Objects.requireNonNull(dest, "dest");
-        Vector3d local = localPoint(box, worldPoint, new Vector3d());
-        local.x = clamp(local.x, -halfX(box), halfX(box));
-        local.y = clamp(local.y, -halfY(box), halfY(box));
-        local.z = clamp(local.z, -halfZ(box), halfZ(box));
-        box.frame().localToWorld(local, dest);
-        return dest.add(boxCenter(box, new Vector3d()));
+        Vec3d local = box.worldPointToLocal(worldPoint);
+        return box.localPointToWorld(
+                clamp(local.x(), -box.halfX(), box.halfX()),
+                clamp(local.y(), -box.halfY(), box.halfY()),
+                clamp(local.z(), -box.halfZ(), box.halfZ())
+        );
     }
 
     /** Static contact between one sphere and one OBB. */
     public static SphereObbContact contact(Sphere3d sphere, Obb3d box) {
         Objects.requireNonNull(sphere, "sphere");
         Objects.requireNonNull(box, "box");
-        Vector3d center = sphere.center();
-        Vector3d closest = closestPointOnBox(box, center, new Vector3d());
-        Vector3d fromSphereToBox = new Vector3d(closest).sub(center);
-        double distSq = fromSphereToBox.lengthSquared();
+        Vec3d center = sphere.center();
+        double halfX = box.halfX();
+        double halfY = box.halfY();
+        double halfZ = box.halfZ();
+        Vec3d localCenter = box.worldPointToLocal(center);
+        double localCenterX = localCenter.x();
+        double localCenterY = localCenter.y();
+        double localCenterZ = localCenter.z();
+        double closestLocalX = clamp(localCenterX, -halfX, halfX);
+        double closestLocalY = clamp(localCenterY, -halfY, halfY);
+        double closestLocalZ = clamp(localCenterZ, -halfZ, halfZ);
+        Vec3d pointOnBox = box.localPointToWorld(
+                closestLocalX,
+                closestLocalY,
+                closestLocalZ
+        );
+        double fromSphereToBoxX = pointOnBox.x() - center.x();
+        double fromSphereToBoxY = pointOnBox.y() - center.y();
+        double fromSphereToBoxZ = pointOnBox.z() - center.z();
+        double distSq = fromSphereToBoxX * fromSphereToBoxX
+                + fromSphereToBoxY * fromSphereToBoxY
+                + fromSphereToBoxZ * fromSphereToBoxZ;
         double pen;
-        Vector3d normal = new Vector3d();
-        Vector3d pointOnBox = new Vector3d();
-        OrthonormalFrame3d frame = box.frame();
+        Vec3d normal;
 
         if (distSq < DISTANCE_EPSILON) {
-            Vector3d localCenter = localPoint(box, center, new Vector3d());
-            double[] extents = {halfX(box), halfY(box), halfZ(box)};
-            double[] local = {
-                    localCenter.x, localCenter.y, localCenter.z
-            };
             double minOverlap = Double.MAX_VALUE;
-            double[] bestLocalPoint = {
-                    localCenter.x, localCenter.y, localCenter.z
-            };
             int bestAxis = 0;
             double bestSign = 1.0D;
-            Vector3d axis0 = frame.axisX(new Vector3d());
-            Vector3d axis1 = frame.axisY(new Vector3d());
-            Vector3d axis2 = frame.axisZ(new Vector3d());
-            Vector3d[] worldAxes = {axis0, axis1, axis2};
-            for (int i = 0; i < 3; i++) {
-                double ext = extents[i];
-                double ctr = local[i];
-                double overlap = ext - Math.abs(ctr);
-                if (overlap < minOverlap) {
-                    minOverlap = overlap;
-                    double sign = ctr < 0.0D ? -1.0D : 1.0D;
-                    bestAxis = i;
-                    bestSign = sign;
-                    bestLocalPoint[i] = ext * sign;
-                }
+            double bestLocalX = localCenterX;
+            double bestLocalY = localCenterY;
+            double bestLocalZ = localCenterZ;
+
+            double overlap = halfX - Math.abs(localCenterX);
+            if (overlap < minOverlap) {
+                minOverlap = overlap;
+                bestAxis = 0;
+                bestSign = localCenterX < 0.0D ? -1.0D : 1.0D;
+                bestLocalX = halfX * bestSign;
             }
-            normal.set(worldAxes[bestAxis]).mul(-bestSign);
-            normalizedFinite(normal, worldAxes[0]);
-            pen = minOverlap + sphere.radius();
-            frame.localToWorld(
-                    new Vector3d(
-                            bestLocalPoint[0],
-                            bestLocalPoint[1],
-                            bestLocalPoint[2]),
-                    pointOnBox
+            overlap = halfY - Math.abs(localCenterY);
+            if (overlap < minOverlap) {
+                minOverlap = overlap;
+                bestAxis = 1;
+                bestSign = localCenterY < 0.0D ? -1.0D : 1.0D;
+                bestLocalY = halfY * bestSign;
+            }
+            overlap = halfZ - Math.abs(localCenterZ);
+            if (overlap < minOverlap) {
+                minOverlap = overlap;
+                bestAxis = 2;
+                bestSign = localCenterZ < 0.0D ? -1.0D : 1.0D;
+                bestLocalZ = halfZ * bestSign;
+            }
+
+            double localNormalX = 0.0D;
+            double localNormalY = 0.0D;
+            double localNormalZ = 0.0D;
+            if (bestAxis == 0) {
+                localNormalX = -bestSign;
+            } else if (bestAxis == 1) {
+                localNormalY = -bestSign;
+            } else {
+                localNormalZ = -bestSign;
+            }
+            /*
+             * bestAxis/bestSign are OBB-local. The contact normal is a world
+             * space free vector, so transform the selected local axis without
+             * applying any translation.
+             */
+            normal = box.localVectorToWorld(
+                    localNormalX,
+                    localNormalY,
+                    localNormalZ
             );
-            pointOnBox.add(boxCenter(box, new Vector3d()));
+            pen = minOverlap + sphere.radius();
+            pointOnBox = box.localPointToWorld(
+                    bestLocalX,
+                    bestLocalY,
+                    bestLocalZ
+            );
         } else {
             double dist = Math.sqrt(distSq);
-            normal.set(fromSphereToBox).mul(1.0D / dist);
-            normalizedFinite(normal, frame.axisX(new Vector3d()));
+            normal = normalizedFinite(
+                    fromSphereToBoxX / dist,
+                    fromSphereToBoxY / dist,
+                    fromSphereToBoxZ / dist,
+                    Vec3d.X
+            );
             pen = sphere.radius() - dist;
-            pointOnBox.set(closest);
         }
         if (pen < 0.0D) {
             pen = 0.0D;
@@ -149,7 +203,7 @@ public final class SphereObbCollision {
     public static Optional<SphereObbSweepHit> sweep(
             Sphere3d sphere,
             Obb3d box,
-            Vector3dc movement
+            Vec3d movement
     ) {
         SphereSweepResult result = sweepDetailed(sphere, box, movement);
         if (result.status() == SphereSweepResult.Status.INDETERMINATE) {
@@ -162,7 +216,7 @@ public final class SphereObbCollision {
     public static SphereSweepResult sweepDetailed(
             Sphere3d sphere,
             Obb3d box,
-            Vector3dc movement
+            Vec3d movement
     ) {
         return sweepDetailed(sphere, box, movement, MAX_SWEEP_ITERATIONS);
     }
@@ -171,7 +225,7 @@ public final class SphereObbCollision {
     public static SphereSweepResult sweepDetailed(
             Sphere3d sphere,
             Obb3d box,
-            Vector3dc movement,
+            Vec3d movement,
             int maxIterations
     ) {
         Objects.requireNonNull(sphere, "sphere");
@@ -192,11 +246,11 @@ public final class SphereObbCollision {
     private static SphereSweepResult sweepConservativeAdvancement(
             Sphere3d sphere,
             Obb3d box,
-            Vector3dc movement,
+            Vec3d movement,
             double tolerance,
             int maxIterations
     ) {
-        Vector3d movementVector = new Vector3d(movement);
+        Vec3d movementVector = movement;
         if (movementVector.lengthSquared() < DISTANCE_EPSILON) {
             SphereObbContact initial = contact(sphere, box);
             double distance = signedDistance(sphere, box);
@@ -218,7 +272,7 @@ public final class SphereObbCollision {
         double maximumClosingSpeed = movementVector.length();
 
         for (int iter = 0; iter < maxIterations; iter++) {
-            Obb3d currentBox = box.moved(movementVector.mul(t, new Vector3d()));
+            Obb3d currentBox = box.moved(movementVector.multiply(t));
             double distance = signedDistance(sphere, currentBox);
             SphereObbContact currentContact = contact(sphere, currentBox);
             if (!Double.isFinite(distance)) {
@@ -282,7 +336,7 @@ public final class SphereObbCollision {
     private static SphereSweepResult refineTranslationalSweep(
             Sphere3d sphere,
             Obb3d box,
-            Vector3d movement
+            Vec3d movement
     ) {
         double initialDistance = signedDistance(sphere, box);
         SphereObbContact initialContact = contact(sphere, box);
@@ -313,41 +367,81 @@ public final class SphereObbCollision {
                     "initial touching contact is tangent or separating");
         }
 
-        Vector3d center = sphere.center();
-        Vector3d pointStart = localPoint(
-                box, center, new Vector3d());
-        Vector3d pointVelocity = new Vector3d(
-                box.frame().worldToLocal(movement, new Vector3d())
-        ).mul(-1.0D);
-        double[] starts = {pointStart.x, pointStart.y, pointStart.z};
-        double[] velocities = {
-                pointVelocity.x, pointVelocity.y, pointVelocity.z
-        };
-        double[] limits = {halfX(box), halfY(box), halfZ(box)};
+        Vec3d center = sphere.center();
+        Vec3d pointStart = box.worldPointToLocal(center);
+        Vec3d pointVelocity = box.frame().worldToLocal(movement);
+        double startX = pointStart.x();
+        double startY = pointStart.y();
+        double startZ = pointStart.z();
+        double velocityX = -pointVelocity.x();
+        double velocityY = -pointVelocity.y();
+        double velocityZ = -pointVelocity.z();
+        double limitX = box.halfX();
+        double limitY = box.halfY();
+        double limitZ = box.halfZ();
 
-        List<Double> boundaries = new ArrayList<>();
-        boundaries.add(0.0D);
-        boundaries.add(1.0D);
-        for (int axis = 0; axis < 3; axis++) {
-            double velocity = velocities[axis];
-            if (Math.abs(velocity) <= SWEEP_SPEED_EPSILON) {
-                continue;
-            }
-            addBoundary(boundaries, (-limits[axis] - starts[axis]) / velocity);
-            addBoundary(boundaries, (limits[axis] - starts[axis]) / velocity);
+        double[] boundaries = new double[8];
+        int boundaryCount = 0;
+        boundaries[boundaryCount++] = 0.0D;
+        boundaries[boundaryCount++] = 1.0D;
+        if (Math.abs(velocityX) > SWEEP_SPEED_EPSILON) {
+            boundaryCount = addBoundary(
+                    boundaries,
+                    boundaryCount,
+                    (-limitX - startX) / velocityX
+            );
+            boundaryCount = addBoundary(
+                    boundaries,
+                    boundaryCount,
+                    (limitX - startX) / velocityX
+            );
         }
-        Collections.sort(boundaries);
-        boundaries = mergeBoundaries(boundaries);
+        if (Math.abs(velocityY) > SWEEP_SPEED_EPSILON) {
+            boundaryCount = addBoundary(
+                    boundaries,
+                    boundaryCount,
+                    (-limitY - startY) / velocityY
+            );
+            boundaryCount = addBoundary(
+                    boundaries,
+                    boundaryCount,
+                    (limitY - startY) / velocityY
+            );
+        }
+        if (Math.abs(velocityZ) > SWEEP_SPEED_EPSILON) {
+            boundaryCount = addBoundary(
+                    boundaries,
+                    boundaryCount,
+                    (-limitZ - startZ) / velocityZ
+            );
+            boundaryCount = addBoundary(
+                    boundaries,
+                    boundaryCount,
+                    (limitZ - startZ) / velocityZ
+            );
+        }
+        Arrays.sort(boundaries, 0, boundaryCount);
+        boundaryCount = mergeBoundaries(boundaries, boundaryCount);
 
-        for (int interval = 0; interval + 1 < boundaries.size(); interval++) {
-            double minimum = boundaries.get(interval);
-            double maximum = boundaries.get(interval + 1);
+        for (int interval = 0; interval + 1 < boundaryCount; interval++) {
+            double minimum = boundaries[interval];
+            double maximum = boundaries[interval + 1];
             if (maximum - minimum <= ROOT_TIME_EPSILON) {
                 continue;
             }
             double sample = (minimum + maximum) * 0.5D;
             Quadratic distance = distanceSquaredQuadratic(
-                    starts, velocities, limits, sample);
+                    startX,
+                    startY,
+                    startZ,
+                    velocityX,
+                    velocityY,
+                    velocityZ,
+                    limitX,
+                    limitY,
+                    limitZ,
+                    sample
+            );
             if (distance == null) {
                 return SphereSweepResult.indeterminate(
                         "non-finite exact sphere sweep quadratic");
@@ -360,14 +454,16 @@ public final class SphereObbCollision {
                                 ? "indeterminate exact sphere sweep quadratic"
                                 : rootResult.diagnostic());
             }
-            for (double root : rootResult.roots()) {
+            for (int rootIndex = 0;
+                 rootIndex < rootResult.rootCount();
+                 rootIndex++) {
+                double root = rootResult.root(rootIndex);
                 if (root < minimum - ROOT_TIME_EPSILON
                         || root > maximum + ROOT_TIME_EPSILON) {
                     continue;
                 }
                 double time = clamp(root, minimum, maximum);
-                Obb3d hitBox = box.moved(
-                        movement.mul(time, new Vector3d()));
+                Obb3d hitBox = box.moved(movement.multiply(time));
                 SphereObbContact contact = contact(sphere, hitBox);
                 double closing = -movement.dot(
                         contact.normalFromSphereToBox());
@@ -389,77 +485,85 @@ public final class SphereObbCollision {
                         + "entering root");
     }
 
-    private static Vector3d localPoint(
-            Obb3d box,
-            Vector3dc worldPoint,
-            Vector3d dest
-    ) {
-        Vector3d offset = new Vector3d(worldPoint).sub(
-                boxCenter(box, new Vector3d()));
-        return box.frame().worldToLocal(offset, dest);
-    }
-
-    private static Vector3d boxCenter(Obb3d box, Vector3d dest) {
-        return box.center(dest);
-    }
-
-    private static double halfX(Obb3d box) {
-        return box.halfExtents(new Vector3d()).x;
-    }
-
-    private static double halfY(Obb3d box) {
-        return box.halfExtents(new Vector3d()).y;
-    }
-
-    private static double halfZ(Obb3d box) {
-        return box.halfExtents(new Vector3d()).z;
-    }
-
-    private static void addBoundary(
-            List<Double> boundaries,
+    private static int addBoundary(
+            double[] boundaries,
+            int count,
             double candidate
     ) {
         if (Double.isFinite(candidate)
                 && candidate > ROOT_TIME_EPSILON
                 && candidate < 1.0D - ROOT_TIME_EPSILON) {
-            boundaries.add(candidate);
+            boundaries[count++] = candidate;
         }
+        return count;
     }
 
-    private static List<Double> mergeBoundaries(List<Double> sorted) {
-        List<Double> merged = new ArrayList<>();
-        for (double candidate : sorted) {
-            if (merged.isEmpty()
-                    || candidate - merged.get(merged.size() - 1)
+    private static int mergeBoundaries(
+            double[] sorted,
+            int count
+    ) {
+        int mergedCount = 0;
+        for (int index = 0; index < count; index++) {
+            double candidate = sorted[index];
+            if (mergedCount == 0
+                    || candidate - sorted[mergedCount - 1]
                     > ROOT_TIME_EPSILON) {
-                merged.add(candidate);
+                sorted[mergedCount++] = candidate;
             }
         }
-        return merged;
+        return mergedCount;
     }
 
     private static Quadratic distanceSquaredQuadratic(
-            double[] starts,
-            double[] velocities,
-            double[] extents,
+            double startX,
+            double startY,
+            double startZ,
+            double velocityX,
+            double velocityY,
+            double velocityZ,
+            double extentX,
+            double extentY,
+            double extentZ,
             double sampleTime
     ) {
         double quadratic = 0.0D;
         double linear = 0.0D;
         double constant = 0.0D;
-        for (int axis = 0; axis < 3; axis++) {
-            double sample = starts[axis] + velocities[axis] * sampleTime;
-            double offset;
-            if (sample < -extents[axis]) {
-                offset = starts[axis] + extents[axis];
-            } else if (sample > extents[axis]) {
-                offset = starts[axis] - extents[axis];
-            } else {
-                continue;
-            }
-            double velocity = velocities[axis];
-            quadratic += velocity * velocity;
-            linear += 2.0D * offset * velocity;
+        double sample = startX + velocityX * sampleTime;
+        double offset;
+        if (sample < -extentX) {
+            offset = startX + extentX;
+            quadratic += velocityX * velocityX;
+            linear += 2.0D * offset * velocityX;
+            constant += offset * offset;
+        } else if (sample > extentX) {
+            offset = startX - extentX;
+            quadratic += velocityX * velocityX;
+            linear += 2.0D * offset * velocityX;
+            constant += offset * offset;
+        }
+        sample = startY + velocityY * sampleTime;
+        if (sample < -extentY) {
+            offset = startY + extentY;
+            quadratic += velocityY * velocityY;
+            linear += 2.0D * offset * velocityY;
+            constant += offset * offset;
+        } else if (sample > extentY) {
+            offset = startY - extentY;
+            quadratic += velocityY * velocityY;
+            linear += 2.0D * offset * velocityY;
+            constant += offset * offset;
+        }
+        sample = startZ + velocityZ * sampleTime;
+        if (sample < -extentZ) {
+            offset = startZ + extentZ;
+            quadratic += velocityZ * velocityZ;
+            linear += 2.0D * offset * velocityZ;
+            constant += offset * offset;
+        } else if (sample > extentZ) {
+            offset = startZ - extentZ;
+            quadratic += velocityZ * velocityZ;
+            linear += 2.0D * offset * velocityZ;
             constant += offset * offset;
         }
         if (!Double.isFinite(quadratic)
@@ -470,27 +574,46 @@ public final class SphereObbCollision {
         return new Quadratic(quadratic, linear, constant);
     }
 
-    private static void normalizedFinite(
-            Vector3d vector,
-            Vector3d fallback
+    private static Vec3d normalizedFinite(
+            double x,
+            double y,
+            double z,
+            Vec3d fallback
     ) {
-        if (!isFinite(vector) || vector.lengthSquared() <= EPSILON * EPSILON) {
-            vector.set(fallback);
+        double lengthSquared = x * x + y * y + z * z;
+        if (!Double.isFinite(x)
+                || !Double.isFinite(y)
+                || !Double.isFinite(z)
+                || lengthSquared <= EPSILON * EPSILON) {
+            x = fallback.x();
+            y = fallback.y();
+            z = fallback.z();
+            lengthSquared = x * x + y * y + z * z;
         }
-        if (!isFinite(vector) || vector.lengthSquared() <= EPSILON * EPSILON) {
-            vector.set(1.0D, 0.0D, 0.0D);
+        if (!Double.isFinite(lengthSquared)
+                || lengthSquared <= EPSILON * EPSILON) {
+            return Vec3d.X;
         }
-        vector.normalize();
-        if (!isFinite(vector)
-                || Math.abs(vector.lengthSquared() - 1.0D) > 1.0E-6D) {
-            vector.set(1.0D, 0.0D, 0.0D);
+        double inverseLength = 1.0D / Math.sqrt(lengthSquared);
+        double normalizedX = x * inverseLength;
+        double normalizedY = y * inverseLength;
+        double normalizedZ = z * inverseLength;
+        if (!Double.isFinite(normalizedX)
+                || !Double.isFinite(normalizedY)
+                || !Double.isFinite(normalizedZ)) {
+            return Vec3d.X;
         }
+        double normalizedLengthSquared = normalizedX * normalizedX
+                + normalizedY * normalizedY
+                + normalizedZ * normalizedZ;
+        if (Math.abs(normalizedLengthSquared - 1.0D) > 1.0E-6D) {
+            return Vec3d.X;
+        }
+        return new Vec3d(normalizedX, normalizedY, normalizedZ);
     }
 
-    private static boolean isFinite(Vector3dc vector) {
-        return Double.isFinite(vector.x())
-                && Double.isFinite(vector.y())
-                && Double.isFinite(vector.z());
+    private static boolean isFinite(Vec3d vector) {
+        return vector.isFinite();
     }
 
     private static double clamp(double value, double min, double max) {
@@ -517,7 +640,7 @@ public final class SphereObbCollision {
                 }
                 double root = -adjustedConstant / this.linear;
                 return Double.isFinite(root)
-                        ? QuadraticRootResult.roots(List.of(root))
+                        ? QuadraticRootResult.roots(root)
                         : QuadraticRootResult.indeterminate(
                                 "non-finite linear-sphere quadratic root");
             }
@@ -545,7 +668,7 @@ public final class SphereObbCollision {
                     return QuadraticRootResult.indeterminate(
                             "non-finite degenerate sphere quadratic root");
                 }
-                return QuadraticRootResult.roots(List.of(root, root));
+                return QuadraticRootResult.roots(root, root);
             }
             double first = q / this.quadratic;
             double second = adjustedConstant / q;
@@ -553,10 +676,9 @@ public final class SphereObbCollision {
                 return QuadraticRootResult.indeterminate(
                         "non-finite stable sphere quadratic root");
             }
-            return QuadraticRootResult.roots(
-                    first <= second
-                            ? List.of(first, second)
-                            : List.of(second, first));
+            return first <= second
+                    ? QuadraticRootResult.roots(first, second)
+                    : QuadraticRootResult.roots(second, first);
         }
     }
 
@@ -566,31 +688,48 @@ public final class SphereObbCollision {
 
     record QuadraticRootResult(
             QuadraticRootStatus status,
-            List<Double> roots,
+            double firstRoot,
+            double secondRoot,
+            int rootCount,
             String diagnostic
     ) {
         QuadraticRootResult {
-            roots = List.copyOf(roots);
             diagnostic = diagnostic == null ? "" : diagnostic;
-            if ((status == QuadraticRootStatus.ROOTS) != !roots.isEmpty()) {
+            if (rootCount < 0 || rootCount > 2) {
+                throw new IllegalArgumentException(
+                        "quadratic root count must be 0, 1, or 2"
+                );
+            }
+            if ((status == QuadraticRootStatus.ROOTS) != (rootCount > 0)) {
                 throw new IllegalArgumentException(
                         "only ROOTS may carry quadratic roots");
             }
         }
 
-        static QuadraticRootResult roots(List<Double> roots) {
+        double root(int index) {
+            if (index == 0) return this.firstRoot;
+            if (index == 1 && this.rootCount == 2) return this.secondRoot;
+            throw new IndexOutOfBoundsException(index);
+        }
+
+        static QuadraticRootResult roots(double root) {
             return new QuadraticRootResult(
-                    QuadraticRootStatus.ROOTS, roots, "");
+                    QuadraticRootStatus.ROOTS, root, 0.0D, 1, "");
+        }
+
+        static QuadraticRootResult roots(double first, double second) {
+            return new QuadraticRootResult(
+                    QuadraticRootStatus.ROOTS, first, second, 2, "");
         }
 
         static QuadraticRootResult noRealRoot(String proof) {
             return new QuadraticRootResult(
-                    QuadraticRootStatus.NO_REAL_ROOT, List.of(), proof);
+                    QuadraticRootStatus.NO_REAL_ROOT, 0.0D, 0.0D, 0, proof);
         }
 
         static QuadraticRootResult indeterminate(String diagnostic) {
             return new QuadraticRootResult(
-                    QuadraticRootStatus.INDETERMINATE, List.of(), diagnostic);
+                    QuadraticRootStatus.INDETERMINATE, 0.0D, 0.0D, 0, diagnostic);
         }
     }
 }

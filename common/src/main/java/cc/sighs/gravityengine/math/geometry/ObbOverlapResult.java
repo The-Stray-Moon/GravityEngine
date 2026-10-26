@@ -1,7 +1,6 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Vector3d;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /** Immutable, unambiguous static SAT classification for one ordered OBB pair. */
@@ -62,16 +61,16 @@ public final class ObbOverlapResult {
     public boolean hasNormal() { return this.status != Status.SEPARATED; }
     public boolean hasMtv() { return this.status == Status.OVERLAPPING; }
 
-    public Vector3d normal(Vector3d dest) {
+    public Vec3d normal() {
         if (!hasNormal()) throw new IllegalStateException("separated shapes have no collision normal");
-        return Objects.requireNonNull(dest, "dest").set(
+        return new Vec3d(
                 this.normalX, this.normalY, this.normalZ
         );
     }
 
-    public Vector3d mtv(Vector3d dest) {
+    public Vec3d mtv() {
         if (!hasMtv()) throw new IllegalStateException("only overlapping shapes have an MTV");
-        return Objects.requireNonNull(dest, "dest").set(
+        return new Vec3d(
                 this.normalX * this.penetration,
                 this.normalY * this.penetration,
                 this.normalZ * this.penetration

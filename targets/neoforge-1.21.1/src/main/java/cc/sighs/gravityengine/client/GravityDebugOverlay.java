@@ -19,9 +19,9 @@ public final class GravityDebugOverlay {
         var frame = snapshot.frame();
         event.getLeft().add(String.format(
                 "GravityEngine Gravity: down=(%.3f, %.3f, %.3f) strength=%.3f tick=%d rev=%d%s",
-                frame.down().x,
-                frame.down().y,
-                frame.down().z,
+                frame.down().x(),
+                frame.down().y(),
+                frame.down().z(),
                 frame.strength(),
                 snapshot.tick(),
                 snapshot.revision(),
@@ -60,7 +60,8 @@ public final class GravityDebugOverlay {
                         "  roll=%.0f", attitude.rollInput()));
                 event.getLeft().add(String.format(
                         "  q=(%.4f, %.4f, %.4f, %.4f) omega=(%.3f, %.3f, %.3f) view=(%.1f, %.1f)",
-                        q.x, q.y, q.z, q.w, omega.x, omega.y, omega.z,
+                        q.x(), q.y(), q.z(), q.w(),
+                        omega.x(), omega.y(), omega.z(),
                         attitude.viewLocalYaw(), attitude.viewLocalPitch()));
                 event.getLeft().add(String.format(
                         "  remoteAge=%s pending=%d sync=%s",

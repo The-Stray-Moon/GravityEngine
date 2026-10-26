@@ -1,18 +1,21 @@
 package cc.sighs.gravityengine.gravity.integration;
 
 import cc.sighs.gravityengine.gravity.GravityFrame;
-import cc.sighs.gravityengine.gravity.collision.MinecraftGeometryAdapter;
+import cc.sighs.gravityengine.gravity.collision.SupportTransport;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CollisionBody;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
 import cc.sighs.gravityengine.gravity.minecraft.access.CharacterControlAccess;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityLivingAccess;
+import cc.sighs.gravityengine.gravity.minecraft.collision.MinecraftCollisionGeometryAdapter;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.model.GravityOperationType;
 import cc.sighs.gravityengine.gravity.movement.ElytraAerodynamics;
 import cc.sighs.gravityengine.gravity.movement.SneakEdgePreventionService;
 import cc.sighs.gravityengine.gravity.movement.TravelCapturePlan;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
+import cc.sighs.gravityengine.gravity.runtime.RestingContactSnapshot;
 import cc.sighs.gravityengine.math.geometry.Aabb3d;
 import cc.sighs.gravityengine.player.CharacterControlRuntime;
 import net.minecraft.world.entity.Entity;
@@ -21,6 +24,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Objects;
+import java.util.Optional;
 
 public final class LivingGravityIntegration {
     private LivingGravityIntegration() {}
@@ -31,51 +35,132 @@ public final class LivingGravityIntegration {
         Objects.requireNonNull(travelVector);
 
         if (!entity.isControlledByLocalInstance()) return null;
-        cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator.updateBody(entity);
+        if (entity.level().isClientSide()) {
+            if (!(entity instanceof Player)) {
+                cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator
+                        .updateReplicaBody(entity);
+            } else {
+                // Player application/body commits remain server-owned. Native
+                // locomotion mode belongs to the predicting client, however:
+                // refresh it before travel captures support. Its nested move
+                // cannot change modes inside this operation (notably after a
+                // native passenger removal).
+                MovementModeIntegration.update(entity);
+            }
+        } else {
+            cc.sighs.gravityengine.gravity.integration.GravityApplicationCoordinator
+                    .updateBody(entity);
+        }
+
+        if (entity.level().isClientSide()
+                && entity instanceof Player
+                && MovementModeIntegration.desired(entity)
+                == cc.sighs.gravityengine.gravity.runtime.GravityOperationState
+                .MovementMode.NATIVE_FALLBACK
+                && !GravityInfluencePolicy.hasExternalCollisionProviders(entity)) {
+            return null;
+        }
 
         var plan = GravityInfluencePolicy.committedPlan(entity);
-        if (!plan.usesCustomMoveSolver()) {
+        if (!plan.usesCustomMoveSolver() && !GravityInfluencePolicy.hasExternalCollisionProviders(entity)) {
             return null;
         }
 
         var authorityFrame = GravityFrameAccess.authoritativeFrame(entity);
-        var samplePoint = GravityEntityGeometry.bodyCenter(entity, authorityFrame);
+        var samplePoint = GravityEntityGeometry.bodyCenter(entity);
         Vec3 axes = free3dInput(travelVector.x, travelVector.z,
                 GravityLivingAccess.cast(entity).gravityengine$isJumping(),
                 entity instanceof CharacterControlAccess.LocalInput local
                         ? local.gravityengine$descendHeld() : entity.isShiftKeyDown());
+        var gravityComponent = GravityEntityAccess.cast(entity)
+                .gravityengine$gravityComponent();
+        var operationRuntime = gravityComponent.operationState();
+        Optional<SupportTransport> supportTransportPreflight =
+                gravityComponent.moveInterop().subLevelMoveEvidence() == null
+                        ? EngineSupportTransportIntegration.preflight(
+                                entity,
+                                operationRuntime,
+                                entity.level().getGameTime(),
+                                1.0D
+                        )
+                        : Optional.empty();
+        cc.sighs.gravityengine.api.math.Vec3d transportDisplacement =
+                supportTransportPreflight
+                        .map(SupportTransport::displacement)
+                        .orElse(cc.sighs.gravityengine.api.math.Vec3d.ZERO);
+        Optional<Aabb3d> supportRelativeBounds =
+                supportTransportPreflight
+                        .flatMap(SupportTransport::trajectory)
+                        .filter(
+                                cc.sighs.gravityengine.gravity
+                                        .collision
+                                        .SupportMotionTrajectory::requiresGeneralSweep
+                        )
+                        .map(
+                                cc.sighs.gravityengine.gravity
+                                        .collision
+                                        .SupportMotionTrajectory::relativeBounds
+                        );
         // The resolved step may remove provisional sneak slowdown. Capture
         // the full normalized input bound before that semantic handoff.
         TravelCapturePlan ordinary = captureTravelPlan(entity,
-                entity instanceof CharacterControlAccess.LocalInput ? new Vec3(1, 1, 1) : axes);
+                entity instanceof CharacterControlAccess.LocalInput ? new Vec3(1, 1, 1) : axes,
+                transportDisplacement,
+                supportRelativeBounds);
         Vec3 incomingVelocity = entity.getDeltaMovement();
         boolean elytra = entity.isFallFlying();
-        Aabb3d incomingBounds = MinecraftGeometryAdapter.toAabb3d(entity.getBoundingBox());
+        Aabb3d incomingBounds = MinecraftCollisionGeometryAdapter.toAabb3d(entity.getBoundingBox());
         double maxStep = entity.maxUpStep();
         TravelCapturePlan[] capture = new TravelCapturePlan[1];
         var op = cc.sighs.gravityengine.gravity.integration.GravityOperation.open(entity, GravityOperationType.TRAVEL,
                 samplePoint, 1.0D, (sample, proposedFrame) -> {
                     // Bound every possible look/reference orientation, including a
                     // geometry transition selecting the installed fallback frame.
-                    Vec3 aerodynamicAcceleration =
+                    cc.sighs.gravityengine.api.math.Vec3d aerodynamicAcceleration =
                             entity.isNoGravity()
-                                    ? Vec3.ZERO
+                                    ? cc.sighs.gravityengine.api.math.Vec3d.ZERO
                                     : sample.accelerationVector();
 
                     double aerodynamicBound = elytra
                             ? ElytraAerodynamics.maximumRequestMagnitude(
-                            incomingVelocity,
+                            MinecraftMathAdapter.toVec3d(
+                                    incomingVelocity),
                             aerodynamicAcceleration
                     )
                             : 0.0D;
-                    capture[0] = aerodynamicBound > 0 ? TravelCapturePlan.buildIsotropic(
-                            incomingBounds, Vec3.ZERO, aerodynamicBound, maxStep) : ordinary;
+                    capture[0] = aerodynamicBound > 0
+                            ? supportRelativeBounds.map(
+                                    relative ->
+                                            TravelCapturePlan
+                                                    .buildIsotropic(
+                                                            incomingBounds,
+                                                            cc.sighs.gravityengine.api.math.Vec3d.ZERO,
+                                                            aerodynamicBound,
+                                                            transportDisplacement,
+                                                            relative,
+                                                            maxStep
+                                                    )
+                            ).orElseGet(
+                                    () -> TravelCapturePlan
+                                            .buildIsotropic(
+                                                    incomingBounds,
+                                                    cc.sighs.gravityengine.api.math.Vec3d.ZERO,
+                                                    aerodynamicBound,
+                                                    transportDisplacement,
+                                                    maxStep
+                                            )
+                            )
+                            : ordinary;
                     return capture[0].domain();
                 });
         try {
+            EngineSupportTransportIntegration.stageResolvedTransport(
+                    operationRuntime,
+                    supportTransportPreflight
+            );
             var character = CharacterControlRuntime.resolve(
                     entity,
-                    op.frame(),
+                    op.gravitySnapshot().frame(),
                     op.controlTerminalSupportAtStepStart()
             );
             Vec3 resolvedTravel = entity instanceof CharacterControlAccess.LocalInput local
@@ -86,7 +171,8 @@ public final class LivingGravityIntegration {
                     ? new Vec3(resolvedTravel.x, axes.y, resolvedTravel.z)
                     : resolvedTravel;
             return new GravityTravelContext(entity, input, op, character, capture[0],
-                    cc.sighs.gravityengine.look.PlayerLookIntegration.capture(entity, op.frame()));
+                    cc.sighs.gravityengine.look.PlayerLookIntegration.capture(entity, op.gravitySnapshot().frame()),
+                    MovementEnvironmentCapture.capture(entity, operationRuntime.collisionOperation().workTracker()));
         } catch (RuntimeException | Error failure) {
             op.close();
             throw failure;
@@ -112,19 +198,36 @@ public final class LivingGravityIntegration {
         }
 
         GravityFrame frame =
-                GravityFrameAccess.authoritativeFrame(entity);
+                GravityFrameAccess.installedLocomotionFrame(entity);
 
         Vec3 self = cc.sighs.gravityengine.gravity.integration.GravityMovementInput.calculateRelativeMovement(entity, speed, input, frame);
-        GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime()
-                .recordSelfWalk(entity.level().getGameTime(), self);
+        GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState()
+                .recordSelfWalk(
+                        entity.level().getGameTime(),
+                        MinecraftMathAdapter.toVec3d(self));
         return entity.getDeltaMovement().add(self);
     }
 
-    /** Runs at Vanilla's accepted jump boundary, before its event callback. */
-    public static void commitJump(LivingEntity entity, Vec3 before) {
-        var runtime = GravityEntityAccess.cast(entity).gravityengine$gravityComponent().runtime();
-        runtime.recordSelfWalk(entity.level().getGameTime(), entity.getDeltaMovement().subtract(before));
+    /** Runs only after Vanilla accepts its jump, before the jump event. */
+    public static void commitJump(
+            LivingEntity entity,
+            cc.sighs.gravityengine.gravity.integration.vanilla.VanillaPropulsionBridge.Jump jump
+    ) {
+        var runtime = GravityEntityAccess.cast(entity)
+                .gravityengine$gravityComponent().operationState();
+        long tick = entity.level().getGameTime();
+        Vec3 jumpDelta = entity.getDeltaMovement().subtract(jump.before());
+        var releaseVelocity = jump.releaseVelocity();
+        if (releaseVelocity.lengthSquared() > 0.0D) {
+            entity.setDeltaMovement(entity.getDeltaMovement().add(
+                    MinecraftMathAdapter.toMinecraft(releaseVelocity)));
+            runtime.recordSupportMotion(tick, releaseVelocity);
+        }
+        runtime.recordSelfWalk(tick, MinecraftMathAdapter.toVec3d(jumpDelta));
+        // A nested jump must not leave an unconsumed platform displacement.
+        runtime.clearEngineSupportTransport();
         runtime.clearRestingContactSnapshot();
+        runtime.clearPersistentSupportState();
         if (entity instanceof Player player) {
             ((CharacterControlAccess) player).gravityengine$characterControl().invalidatePlan();
         }
@@ -134,23 +237,62 @@ public final class LivingGravityIntegration {
             LivingEntity entity,
             Vec3 effectiveTravelInput
     ) {
+        return captureTravelPlan(
+                entity,
+                effectiveTravelInput,
+                cc.sighs.gravityengine.api.math.Vec3d.ZERO
+        );
+    }
+
+    public static TravelCapturePlan captureTravelPlan(
+            LivingEntity entity,
+            Vec3 effectiveTravelInput,
+            cc.sighs.gravityengine.api.math.Vec3d transportDisplacement
+    ) {
+        return captureTravelPlan(
+                entity,
+                effectiveTravelInput,
+                transportDisplacement,
+                Optional.empty()
+        );
+    }
+
+    private static TravelCapturePlan captureTravelPlan(
+            LivingEntity entity,
+            Vec3 effectiveTravelInput,
+            cc.sighs.gravityengine.api.math.Vec3d transportDisplacement,
+            Optional<Aabb3d> supportRelativeBounds
+    ) {
         Objects.requireNonNull(entity, "entity");
         Objects.requireNonNull(
                 effectiveTravelInput,
                 "effectiveTravelInput"
         );
-        TravelCapturePlan.requireFinite(effectiveTravelInput, "effectiveTravelInput");
+        TravelCapturePlan.requireFinite(
+                MinecraftMathAdapter.toVec3d(effectiveTravelInput),
+                "effectiveTravelInput");
 
-        Aabb3d bounds = MinecraftGeometryAdapter.toAabb3d(
+        Aabb3d bounds = MinecraftCollisionGeometryAdapter.toAabb3d(
                 entity.getBoundingBox()
         );
-        Vec3 currentVelocity = entity.getDeltaMovement();
+        cc.sighs.gravityengine.api.math.Vec3d currentVelocity =
+                MinecraftMathAdapter.toVec3d(
+                        entity.getDeltaMovement());
         TravelCapturePlan.requireFinite(currentVelocity, "currentVelocity");
 
         double speedCap = entity.onGround()
                 ? entity.getSpeed() * TravelCapturePlan.MAX_GROUNDED_SPEED_FACTOR
                 : GravityLivingAccess.cast(entity)
                 .gravityengine$getFlyingSpeed();
+        // Capture precedes current-scene support classification. A synchronized
+        // exact body may reacquire traction even when native onGround was cleared;
+        // cover both possible input speeds before freezing the scene.
+        if (GravityInfluencePolicy.usesExactBodyCollision(entity)
+                || GravityInfluencePolicy.hasExternalCollisionProviders(entity)) {
+            speedCap = Math.max(Math.abs(speedCap), Math.max(
+                    Math.abs(entity.getSpeed() * TravelCapturePlan.MAX_GROUNDED_SPEED_FACTOR),
+                    Math.abs(GravityLivingAccess.cast(entity).gravityengine$getFlyingSpeed())));
+        }
 
         /*
          * GravityPhysics.calculateRelativeMovement normalizes an input whose
@@ -165,13 +307,27 @@ public final class LivingGravityIntegration {
                         : Math.min(1.0D, Math.sqrt(inputLengthSquared));
 
         double maxLocomotionContribution =
-                Math.abs(speedCap) * normalizedInputMagnitude;
+                Math.abs(speedCap) * normalizedInputMagnitude
+                        + GravityEntityAccess.cast(entity).gravityengine$gravityComponent().operationState()
+                                .supportVelocityContribution().length();
 
-        return TravelCapturePlan.buildIsotropic(
-                bounds,
-                currentVelocity,
-                maxLocomotionContribution,
-                entity.maxUpStep()
+        return supportRelativeBounds.map(
+                relative -> TravelCapturePlan.buildIsotropic(
+                        bounds,
+                        currentVelocity,
+                        maxLocomotionContribution,
+                        transportDisplacement,
+                        relative,
+                        entity.maxUpStep()
+                )
+        ).orElseGet(
+                () -> TravelCapturePlan.buildIsotropic(
+                        bounds,
+                        currentVelocity,
+                        maxLocomotionContribution,
+                        transportDisplacement,
+                        entity.maxUpStep()
+                )
         );
     }
 
@@ -181,26 +337,34 @@ public final class LivingGravityIntegration {
             Player player, Vec3 displacement, net.minecraft.world.entity.MoverType mover,
             boolean stayingOnGroundSurface
     ) {
-        var runtime = GravityEntityAccess.cast(player).gravityengine$gravityComponent().runtime();
+        var runtime = GravityEntityAccess.cast(player).gravityengine$gravityComponent().operationState();
         GravityFrame frame = runtime.activeFrame();
         var step = ((CharacterControlAccess) player).gravityengine$characterControl().at(player.tickCount);
         if (!sneakEdgeEligible(mover, player.getAbilities().flying,
-                frame.worldToLocal(displacement).y, stayingOnGroundSurface,
+                frame.worldToLocal(
+                        MinecraftMathAdapter.toVec3d(displacement))
+                        .y(),
+                stayingOnGroundSurface,
                 step != null && step.ownsDescendInput())) return displacement;
         var operation = runtime.collisionOperation();
         if (operation == null || operation.frame() != frame) {
             throw new IllegalStateException("sneak-edge requires the borrowed movement frame and scene");
         }
-        CollisionBody body = GravityEntityGeometry.body(player, frame);
+        CollisionBody body = GravityEntityGeometry.body(player);
         float stepHeight = player.maxUpStep();
         // Entity.move's checkFallDamage operand already accumulates gravity-relative
-        // locomotion vertical (GravityMoveResult.fallDistanceVertical()).
+        // locomotion vertical (GravityMoveResult.fallDistanceVertical(capturedEnvironmentalUp)).
         if (!isAboveGround(player.onGround(), player.fallDistance, stepHeight, body,
                 frame, operation.scene())) {
             return displacement;
         }
-        return SneakEdgePreventionService.constrainTangentMovement(frame, body, displacement,
-                SneakEdgePreventionService.sceneProbe(operation.scene(), frame, stepHeight));
+        return MinecraftMathAdapter.toMinecraft(
+                SneakEdgePreventionService.constrainTangentMovement(
+                        frame,
+                        body,
+                        MinecraftMathAdapter.toVec3d(displacement),
+                        SneakEdgePreventionService.sceneProbe(
+                                operation.scene(), frame, stepHeight)));
     }
 
     static boolean sneakEdgeEligible(net.minecraft.world.entity.MoverType mover, boolean flying,

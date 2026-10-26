@@ -1,10 +1,13 @@
 package cc.sighs.gravityengine.gravity.integration.vanilla;
 
-import cc.sighs.gravityengine.gravity.collision.MinecraftGeometryAdapter;
 import cc.sighs.gravityengine.gravity.GravityFrame;
-import cc.sighs.gravityengine.gravity.kinematic.geometry.*;
+import cc.sighs.gravityengine.gravity.kinematic.geometry.CharacterCapsule;
+import cc.sighs.gravityengine.gravity.kinematic.geometry.CollisionBody;
+import cc.sighs.gravityengine.gravity.kinematic.geometry.OrientedBox;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
+import cc.sighs.gravityengine.gravity.minecraft.collision.MinecraftCollisionGeometryAdapter;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.math.geometry.ObbSat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
@@ -19,16 +22,16 @@ public final class VanillaBodySensors {
     private VanillaBodySensors() {}
 
     public static CollisionBody captureBody(Entity entity) {
-        return GravityEntityGeometry.exactBody(entity, GravityFrameAccess.authoritativeFrame(entity));
+        return GravityEntityGeometry.exactBody(entity);
     }
 
     /** Capsule callback occupancy is strict gap < 0. Movement/pose legality
      * instead uses its own penetration band; packet new occupancy first
      * erodes the body by Vanilla's packet margin. Do not unify these policies. */
     public static boolean intersects(CollisionBody body, AABB bounds) {
-        if (body instanceof OrientedBox box) return ObbSat.overlapDetached(box.toObb3d(), MinecraftGeometryAdapter.toObb3d(bounds)).hasMtv();
+        if (body instanceof OrientedBox box) return ObbSat.overlapDetached(box.toObb3d(), MinecraftCollisionGeometryAdapter.toObb3d(bounds)).hasMtv();
         return cc.sighs.gravityengine.gravity.collision.CapsuleAabbCollision.intersects(
-                (CharacterCapsule) body, MinecraftGeometryAdapter.toAabb3d(bounds));
+                (CharacterCapsule) body, MinecraftCollisionGeometryAdapter.toAabb3d(bounds));
     }
 
     public static boolean occupiesCell(CollisionBody body, BlockPos pos) {
@@ -53,23 +56,32 @@ public final class VanillaBodySensors {
         Objects.requireNonNull(frame, "frame");
         Objects.requireNonNull(gravityFeet, "gravityFeet");
         return BlockPos.containing(
-                gravityFeet.add(frame.down().scale(0.2D))
+                gravityFeet.add(
+                        MinecraftMathAdapter.toMinecraft(
+                                frame.down().multiply(0.2D)
+                        )
+                )
         );
     }
 
     public static OrientedBox eyeSensor(Entity entity) {
-        var frame = GravityFrameAccess.authoritativeFrame(entity);
-        var eye = GravityEntityGeometry.eyePosition(entity, GravityEntityGeometry.bodyCenter(entity, frame), frame);
+        var frame = GravityFrameAccess.installedLocomotionFrame(entity);
+        var eye = GravityEntityGeometry.eyePosition(entity, GravityEntityGeometry.bodyCenter(entity), frame);
         // Preserve the native float multiplication before promotion to double.
         float width = GravityEntityGeometry.dimensions(entity).width() * .8F;
-        return OrientedBox.fromDimensions(MinecraftGeometryAdapter.toJoml(eye, new org.joml.Vector3d()),
-                width, 1.0E-6D, frame.orientation());
+        return OrientedBox.fromDimensions(
+                MinecraftMathAdapter.toVec3d(eye),
+                width,
+                1.0E-6D,
+                frame.orientation()
+        );
     }
 
     public static boolean isInWall(Entity entity) {
         if (entity.noPhysics) return false;
         var sensor = eyeSensor(entity);
-        var enclosure = MinecraftGeometryAdapter.toMinecraft(sensor.enclosingAabb());
+        var enclosure = MinecraftCollisionGeometryAdapter.toMinecraft(
+                sensor.enclosingAabb());
         return BlockPos.betweenClosedStream(enclosure).anyMatch(pos -> {
             var state = entity.level().getBlockState(pos);
             if (state.isAir() || !state.isSuffocating(entity.level(), pos)) return false;

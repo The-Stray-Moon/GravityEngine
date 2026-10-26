@@ -1,53 +1,83 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Matrix3d;
-import org.joml.Quaterniond;
-import org.joml.Quaterniondc;
-import org.joml.Vector3d;
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.math.Quatd;
 import java.util.Objects;
 
 /** Lossless double-precision bridge between two immutable orientation representations. */
 public final class BodyOrientation3d {
     private BodyOrientation3d() {}
 
-    public static OrthonormalFrame3d frame(Quaterniondc value) {
-        Quaterniond q = normalized(value);
+    public static OrthonormalFrame3d frame(Quatd value) {
+        Quatd q = normalized(value);
         return new OrthonormalFrame3d(
-                q.transform(new Vector3d(1, 0, 0)),
-                q.transform(new Vector3d(0, 1, 0)),
-                q.transform(new Vector3d(0, 0, 1)));
+                q.transform(Vec3d.X),
+                q.transform(Vec3d.Y),
+                q.transform(Vec3d.Z));
     }
 
-    public static Quaterniond quaternion(OrthonormalFrame3d frame) {
+    public static Quatd quaternion(OrthonormalFrame3d frame) {
         Objects.requireNonNull(frame, "frame");
-        Matrix3d m = new Matrix3d();
-        m.setColumn(0, frame.axisX(new Vector3d()));
-        m.setColumn(1, frame.axisY(new Vector3d()));
-        m.setColumn(2, frame.axisZ(new Vector3d()));
-        return m.getNormalizedRotation(new Quaterniond()).normalize();
+        Vec3d x = frame.axisX();
+        Vec3d y = frame.axisY();
+        Vec3d z = frame.axisZ();
+        /*
+         * Direct Shepperd-style rotation-matrix conversion. The branch on
+         * the largest diagonal keeps the square root away from cancellation
+         * for rotations near 180 degrees.
+         */
+        double trace = x.x() + y.y() + z.z();
+        double qx;
+        double qy;
+        double qz;
+        double qw;
+        if (trace > 0.0D) {
+            double s = Math.sqrt(trace + 1.0D) * 2.0D;
+            qw = 0.25D * s;
+            qx = (y.z() - z.y()) / s;
+            qy = (z.x() - x.z()) / s;
+            qz = (x.y() - y.x()) / s;
+        } else if (x.x() > y.y() && x.x() > z.z()) {
+            double s = Math.sqrt(1.0D + x.x() - y.y() - z.z()) * 2.0D;
+            qw = (y.z() - z.y()) / s;
+            qx = 0.25D * s;
+            qy = (y.x() + x.y()) / s;
+            qz = (z.x() + x.z()) / s;
+        } else if (y.y() > z.z()) {
+            double s = Math.sqrt(1.0D + y.y() - x.x() - z.z()) * 2.0D;
+            qw = (z.x() - x.z()) / s;
+            qx = (y.x() + x.y()) / s;
+            qy = 0.25D * s;
+            qz = (z.y() + y.z()) / s;
+        } else {
+            double s = Math.sqrt(1.0D + z.z() - x.x() - y.y()) * 2.0D;
+            qw = (x.y() - y.x()) / s;
+            qx = (z.x() + x.z()) / s;
+            qy = (z.y() + y.z()) / s;
+            qz = 0.25D * s;
+        }
+        return new Quatd(qx, qy, qz, qw).normalized();
     }
 
-    public static Quaterniond normalized(Quaterniondc value) {
+    public static Quatd normalized(Quatd value) {
         Objects.requireNonNull(value, "orientation");
-        Quaterniond q = new Quaterniond(value);
-        if (!Double.isFinite(q.x) || !Double.isFinite(q.y)
-                || !Double.isFinite(q.z) || !Double.isFinite(q.w)
-                || !Double.isFinite(q.lengthSquared()) || q.lengthSquared() < 1e-24) {
+        double lengthSquared = value.lengthSquared();
+        if (!value.isFinite()
+                || !Double.isFinite(lengthSquared)
+                || lengthSquared < 1.0E-24D) {
             throw new IllegalArgumentException("invalid body orientation");
         }
-        return q.normalize();
+        return value.normalized();
     }
 
     public static boolean matches(OrthonormalFrame3d a, OrthonormalFrame3d b) {
-        return a.axisX(new Vector3d()).distanceSquared(b.axisX(new Vector3d())) <= 1e-12
-                && a.axisY(new Vector3d()).distanceSquared(b.axisY(new Vector3d())) <= 1e-12
-                && a.axisZ(new Vector3d()).distanceSquared(b.axisZ(new Vector3d())) <= 1e-12;
+        return a.axisX().distanceSquared(b.axisX()) <= 1.0E-12D
+                && a.axisY().distanceSquared(b.axisY()) <= 1.0E-12D
+                && a.axisZ().distanceSquared(b.axisZ()) <= 1.0E-12D;
     }
 
     /** Shortest sign-invariant angular distance, in radians, including tiny arcs. */
-    public static double angularDistance(Quaterniondc first, Quaterniondc second) {
-        Quaterniond delta = normalized(first).conjugate().mul(normalized(second)).normalize();
-        return 2.0D * Math.atan2(Math.sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z),
-                Math.abs(delta.w));
+    public static double angularDistance(Quatd first, Quatd second) {
+        return Quatd.angularDistance(first, second);
     }
 }

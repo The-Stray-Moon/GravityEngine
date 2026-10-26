@@ -1,6 +1,8 @@
 package cc.sighs.gravityengine.mixin;
 
-import cc.sighs.gravityengine.gravity.integration.vanilla.*;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorBridge;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaActorSnapshot;
+import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaPropulsionBridge;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Share;

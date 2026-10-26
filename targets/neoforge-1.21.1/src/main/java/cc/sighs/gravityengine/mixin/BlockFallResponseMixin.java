@@ -55,12 +55,12 @@ public abstract class BlockFallResponseMixin {
             Vec3 local,
             Operation<Void> original
     ) {
+        var expected = cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(entity)
+                .gravityengine$gravityComponent().operationState().currentMoveResult();
         original.call(
                 entity,
-                VanillaBlockResponse.fallWorld(
-                        entity,
-                        local
-                )
+                VanillaBlockResponse.fallWorld(entity, local)
         );
+        VanillaBlockResponse.recordFallWrite(entity, expected);
     }
 }

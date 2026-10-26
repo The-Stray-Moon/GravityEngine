@@ -1,7 +1,6 @@
 package cc.sighs.gravityengine.math.geometry;
 
-import org.joml.Vector3d;
-
+import cc.sighs.gravityengine.api.math.Vec3d;
 import java.util.Objects;
 
 /** Immutable continuous-SAT result independent of any character controller. */
@@ -80,8 +79,8 @@ public final class ObbSweepResult {
 
     public boolean hasBindingNormal() { return !this.activeAxes.isEmpty(); }
 
-    public Vector3d bindingNormal(Vector3d dest) {
+    public Vec3d bindingNormal() {
         if (!hasBindingNormal()) throw new IllegalStateException("result has no binding normal");
-        return this.activeAxes.normal(0, dest);
+        return this.activeAxes.normal(0);
     }
 }

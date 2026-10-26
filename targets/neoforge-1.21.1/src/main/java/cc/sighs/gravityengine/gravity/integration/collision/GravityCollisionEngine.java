@@ -1,21 +1,23 @@
 package cc.sighs.gravityengine.gravity.integration.collision;
 
+import cc.sighs.gravityengine.gravity.geometry.BodyRepresentation;
+
 import cc.sighs.gravityengine.gravity.GravityFrame;
-import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import cc.sighs.gravityengine.gravity.collision.*;
 import cc.sighs.gravityengine.gravity.debug.GravityDebugLog;
+import cc.sighs.gravityengine.gravity.integration.diagnostics.MovementCollisionDiagnostics;
 import cc.sighs.gravityengine.gravity.kinematic.KinematicMoveRequest;
 import cc.sighs.gravityengine.gravity.kinematic.geometry.CollisionBody;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
 import cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry;
-import cc.sighs.gravityengine.gravity.runtime.GravityRuntimeState.CollisionOperationContext;
-import cc.sighs.gravityengine.gravity.runtime.GravityRuntimeState;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
+import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
+import cc.sighs.gravityengine.gravity.runtime.GravityOperationState;
+import cc.sighs.gravityengine.gravity.runtime.GravityOperationState.CollisionOperationContext;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * Thin Minecraft adapter over the pure {@link GravityCharacterRoute}.
@@ -25,12 +27,17 @@ import java.util.Optional;
  * move lifecycle. It owns no support continuity, no detach state, no ground
  * authority, no character routing, no traversal, and no gameplay velocity
  * policy.</p>
+ *
+ * <p>Every collision predicate that can be expressed over common collision
+ * values alone lives in the common collision subsystem
+ * ({@link CurrentContactQuery}); this class keeps only the capture and
+ * adaptation entry points that genuinely need a Minecraft entity.</p>
  */
 public final class GravityCollisionEngine {
     /** World-down retains authored step height regardless of actor attitude.
      * Non-default gravity retains the explicit static-voxel allowance. */
     public static StepUpIntent stepIntent(GravityFrame frame, double authoredHeight) {
-        return !GravityInfluencePolicy.requiresReferenceGeometry(frame)
+        return !BodyRepresentation.requiresReferenceGeometry(frame)
                 ? new StepUpIntent(Math.max(0.0D, authoredHeight))
                 : StepUpIntent.customGravity(authoredHeight);
     }
@@ -45,25 +52,26 @@ public final class GravityCollisionEngine {
      * {@code Entity.move} side effects.</p>
      */
     public static Vec3 collide(Entity entity, KinematicMoveRequest request) {
-        GravityRuntimeState runtime =
+        return collide(entity, request, null);
+    }
+
+    public static Vec3 collide(Entity entity, KinematicMoveRequest request,
+                               SupportTransport transport) {
+        GravityOperationState runtime =
                 GravityEntityAccess.cast(entity)
-                        .gravityengine$gravityComponent().runtime();
+                        .gravityengine$gravityComponent().operationState();
 
         GravityMoveResult result =
-                resolve(entity, request);
+                resolve(entity, request, transport, MovementCollisionDiagnostics.capture(entity));
 
-        Vec3 resolved =
-                MinecraftGeometryAdapter.toMinecraft(
-                        result.resolvedMovement()
-                );
-
+        if (entity instanceof net.minecraft.world.entity.item.FallingBlockEntity && result.indeterminate())
+            throw new CollisionSceneCoverageException("indeterminate falling block movement");
         runtime.setCurrentMoveResult(result);
-        runtime.setPreResolved(
-                request.actualMovement(),
-                resolved
-        );
 
-        return resolved;
+
+        return MinecraftMathAdapter.toMinecraft(
+                result.resolvedMovement()
+        );
     }
 
     /**
@@ -74,7 +82,7 @@ public final class GravityCollisionEngine {
             Entity entity,
             KinematicMoveRequest request
     ) {
-        return MinecraftGeometryAdapter.toMinecraft(
+        return MinecraftMathAdapter.toMinecraft(
                 resolveUnpublished(
                         entity,
                         request
@@ -88,21 +96,23 @@ public final class GravityCollisionEngine {
      *
      * <p>The returned result may be consumed only for facts belonging to this
      * auxiliary translation, notably its final endpoint support. It is never
-     * installed as {@link GravityRuntimeState#currentMoveResult()}.</p>
+     * installed as {@link GravityOperationState#currentMoveResult()}.</p>
      */
     public static GravityMoveResult resolveUnpublished(
             Entity entity,
             KinematicMoveRequest request
     ) {
-        return resolve(entity, request);
+        return resolve(entity, request, null, null);
     }
 
     private static GravityMoveResult resolve(
             Entity entity,
-            KinematicMoveRequest request
+            KinematicMoveRequest request,
+            SupportTransport supportTransport,
+            MovementCollisionDiagnostics.Span diagnosticSpan
     ) {
         GravityEntityAccess access = GravityEntityAccess.cast(entity);
-        GravityRuntimeState runtime = access.gravityengine$gravityComponent().runtime();
+        GravityOperationState runtime = access.gravityengine$gravityComponent().operationState();
         GravityFrame frame = runtime.activeFrame();
 
         CollisionOperationContext operation = runtime.collisionOperation();
@@ -119,30 +129,53 @@ public final class GravityCollisionEngine {
         }
 
         CollisionBody body =
-                GravityEntityGeometry.body(entity, frame);
-        if (GravityDebugLog.MOVEMENT_ENABLED) {
+                GravityEntityGeometry.body(entity);
+        if (diagnosticSpan != null) {
             queryContext.setStepDecision(null);
             queryContext.beginCollisionTrace();
-            cc.sighs.gravityengine.gravity.integration.diagnostics.MovementCollisionDiagnostics.input(entity,
-                    (cc.sighs.gravityengine.gravity.kinematic.geometry.OrientedBox) body,
+            MovementCollisionDiagnostics.input(entity, diagnosticSpan,
+                    body,
                     request, frame, scene, "EXACT_BODY");
         }
         var previousSupport = runtime.restingContactSnapshot();
         queryContext.setPreferredSupportFace(previousSupport != null
                 && previousSupport.gameTick() >= scene.time().gameTick() - 1
                 ? previousSupport.faceIdentity() : null);
-        GravityMoveResult result = GravityCharacterRoute.resolve(
-                body,
-                request,
-                frame,
-                scene,
-                queryContext,
-                stepIntent(frame, entity.maxUpStep())
-        );
-        if (GravityDebugLog.MOVEMENT_ENABLED) {
-            cc.sighs.gravityengine.gravity.integration.diagnostics.MovementCollisionDiagnostics.result(entity, result, queryContext);
+
+
+        StepUpIntent stepIntent =
+                entity instanceof net.minecraft.world.entity.decoration.ArmorStand
+                        || entity instanceof net.minecraft.world.entity.item.FallingBlockEntity
+                        ? StepUpIntent.disabled() : stepIntent(
+                        frame,
+                        entity.maxUpStep()
+                );
+
+        GravityMoveResult result =
+                supportTransport != null
+                        && supportTransport
+                        .requiresGeneralSupportSweep()
+                        ? SupportedCharacterRoute.resolve(
+                                body,
+                                request,
+                                frame,
+                                scene,
+                                queryContext,
+                                stepIntent,
+                                supportTransport
+                        )
+                        : GravityCharacterRoute.resolve(
+                                body,
+                                request,
+                                frame,
+                                scene,
+                                queryContext,
+                                stepIntent
+                        );
+        if (diagnosticSpan != null) {
+            MovementCollisionDiagnostics.result(entity, diagnosticSpan, result, queryContext);
         }
-        if (GravityDebugLog.ENABLED) {
+        if (GravityDebugLog.shouldLog(entity)) {
             Vec3 velocity = entity.getDeltaMovement();
             GravityDebugLog.log(
                     entity,
@@ -157,14 +190,10 @@ public final class GravityCollisionEngine {
                             + "positionAnchor=%s frameDown=%s",
                     GravityDebugLog.vec(result.requestedMovement()),
                     GravityDebugLog.vec(frame.worldToLocal(
-                            MinecraftGeometryAdapter.toMinecraft(
-                                    result.requestedMovement())
-                    )),
+                            result.requestedMovement())),
                     GravityDebugLog.vec(result.resolvedMovement()),
                     GravityDebugLog.vec(frame.worldToLocal(
-                            MinecraftGeometryAdapter.toMinecraft(
-                                    result.resolvedMovement())
-                    )),
+                            result.resolvedMovement())),
                     GravityDebugLog.vec(result.recoveryMovement()),
                     GravityDebugLog.vec(result.locomotionMovement()),
                     result.blockedDown(),
@@ -178,7 +207,8 @@ public final class GravityCollisionEngine {
                     result.supportFollowRise(),
                     result.tangentBlockingNormals(),
                     GravityDebugLog.vec(velocity),
-                    GravityDebugLog.vec(frame.worldToLocal(velocity)),
+                    GravityDebugLog.vec(frame.worldToLocal(
+                            MinecraftMathAdapter.toVec3d(velocity))),
                     GravityDebugLog.vec(entity.position()),
                     GravityDebugLog.vec(frame.down())
             );
@@ -198,9 +228,9 @@ public final class GravityCollisionEngine {
         Objects.requireNonNull(entity, "entity");
         Objects.requireNonNull(body, "body");
 
-        GravityRuntimeState runtime =
+        GravityOperationState runtime =
                 GravityEntityAccess.cast(entity)
-                        .gravityengine$gravityComponent().runtime();
+                        .gravityengine$gravityComponent().operationState();
 
         CollisionOperationContext operation =
                 runtime.collisionOperation();
@@ -215,31 +245,9 @@ public final class GravityCollisionEngine {
                                 entity.maxUpStep()
                         );
 
-        return noCollision(
+        return CurrentContactQuery.isClear(
                 body,
                 scene
-        );
-    }
-
-    /**
-     * Explicit scene-consuming legality predicate.
-     *
-     * <p>Tests and operation-local callers should prefer this overload. Moving
-     * obstacles are tested at the operation-start instant rather than by
-     * recapturing live world state.</p>
-     */
-    public static boolean noCollision(
-            CollisionBody body,
-            CollisionScene scene
-    ) {
-        Objects.requireNonNull(body, "body");
-        Objects.requireNonNull(scene, "scene");
-
-        return !hasMeaningfulPenetrationAt(
-                body,
-                scene,
-                0.0D,
-                new ObbQueryContext()
         );
     }
 
@@ -259,8 +267,8 @@ public final class GravityCollisionEngine {
     ) {
         Objects.requireNonNull(entity, "entity");
         Objects.requireNonNull(body, "body");
-        GravityRuntimeState runtime = GravityEntityAccess.cast(entity)
-                .gravityengine$gravityComponent().runtime();
+        GravityOperationState runtime = GravityEntityAccess.cast(entity)
+                .gravityengine$gravityComponent().operationState();
         CollisionOperationContext operation = runtime.collisionOperation();
         if (operation != null) {
             return operation.scene();
@@ -270,85 +278,5 @@ public final class GravityCollisionEngine {
         );
     }
 
-    /**
-     * Operation-scene final-body penetration predicate at an explicit
-     * operation-local obstacle time.  Moving obstacles are probed at that
-     * same instant; a platform that has not yet arrived (or has already left)
-     * cannot own the final body.
-     */
-    public static boolean hasMeaningfulPenetrationAt(
-            CollisionBody body,
-            CollisionScene scene,
-            double obstacleTimeTicks,
-            ObbQueryContext context
-    ) {
-        Objects.requireNonNull(scene, "scene");
-        Objects.requireNonNull(context, "context");
-        CurrentContactQuery.Result current =
-                CurrentContactQuery.contacts(
-                        body,
-                        scene,
-                        obstacleTimeTicks,
-                        context
-                );
-        return CurrentContactQuery.hasMeaningfulPenetration(current);
-    }
-
-    /** Operation-start overlap check over a caller-provided obstacle list. */
-    public static boolean requiresPenetrationRecovery(
-            CollisionBody body,
-            List<CollisionObstacle> obstacles,
-            ObbQueryContext queryContext
-    ) {
-        for (CollisionObstacle obstacle : obstacles) {
-            Optional<CollisionContact> contact = CollisionNarrowPhase.staticContact(
-                    body, obstacle, queryContext
-            );
-            if (contact.isPresent()
-                    && contact.get().penetration()
-                    > CollisionTolerances.PENETRATION_EPSILON) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Exact initial-overlap predicate shared by recovery and tests. */
-    public static boolean requiresPenetrationRecovery(
-            CollisionBody body,
-            List<CollisionObstacle> obstacles
-    ) {
-        return requiresPenetrationRecovery(
-                body, obstacles, new ObbQueryContext()
-        );
-    }
-
-    public static boolean noCollisionAtPosition(
-            Entity entity,
-            double x,
-            double y,
-            double z,
-            Vec3 down
-    ) {
-        return noCollisionAtPosition(
-                entity,
-                new Vec3(x, y, z),
-                GravityFrame.downOnly(down)
-        );
-    }
-
-    public static boolean noCollisionAtPosition(
-            Entity entity,
-            Vec3 positionAnchor,
-            GravityFrame frame
-    ) {
-        CollisionBody body = GravityEntityGeometry.candidateBody(
-                entity,
-                GravityEntityGeometry.dimensions(entity),
-                positionAnchor,
-                frame
-        );
-        return noCollision(entity, body);
-    }
 
 }

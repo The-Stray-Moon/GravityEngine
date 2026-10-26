@@ -29,8 +29,6 @@ public enum ClientNetworkPayloadHandlers
         ClientGravitySyncService.handle(payload);
     }
 
-
-
     @Override
     public void handleBodyAttitudeState(
             ClientboundBodyAttitudeStatePayload payload

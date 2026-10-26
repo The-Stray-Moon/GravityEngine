@@ -1,17 +1,19 @@
 package cc.sighs.gravityengine.mixin;
 
+import cc.sighs.gravityengine.gravity.integration.EntityMovementIntegration;
+
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeComponent;
-import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
 import cc.sighs.gravityengine.gravity.integration.collision.GravityPlayerPoseFitQuery;
+import cc.sighs.gravityengine.gravity.model.GravityCollisionRoute;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
-import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.level.Level;
+import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -24,14 +26,6 @@ public abstract class PlayerMixin extends LivingEntity implements cc.sighs.gravi
         cc.sighs.gravityengine.gravity.minecraft.access.CharacterControlAccess {
     protected PlayerMixin(EntityType<? extends LivingEntity> type, Level level) { super(type, level); }
 
-    /** Vanilla baseTick and LivingEntity.tick directly maintain/wrap yRotO/xRotO.
-     * Observe the completed normal player tick without replacing those writes. */
-    @WrapMethod(method = "tick", require = 1)
-    private void gravityengine$traceViewTick(Operation<Void> original) {
-        try (var trace = PlayerViewDebugLog.begin((Player) (Object) this, "player-tick")) {
-            original.call();
-        }
-    }
     @Unique
     private final cc.sighs.gravityengine.gravity.movement.CharacterControlStep gravityengine$controlStep =
             new cc.sighs.gravityengine.gravity.movement.CharacterControlStep();
@@ -98,16 +92,46 @@ public abstract class PlayerMixin extends LivingEntity implements cc.sighs.gravi
 
     /** The native pre-collision displacement seam. Route ownership is frozen by
      * Entity.move; Vanilla-equivalent collision executes the original method. */
-    @Inject(method = "maybeBackOffFromEdge", at = @At("HEAD"), cancellable = true, require = 1)
-    private void gravityengine$customGravityOwnsSneakEdge(Vec3 movement, MoverType moverType,
-            CallbackInfoReturnable<Vec3> cir) {
+    @Inject(
+            method = "maybeBackOffFromEdge",
+            at = @At("HEAD"),
+            cancellable = true,
+            require = 1
+    )
+    private void gravityengine$customGravityOwnsSneakEdge(
+            Vec3 movement,
+            MoverType moverType,
+            CallbackInfoReturnable<Vec3> cir
+    ) {
         Player self = (Player) (Object) this;
-        var runtime = cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess.cast(self)
-                .gravityengine$gravityComponent().runtime();
-        var route = runtime.movementCollisionRoute();
-        if (route == null) route = GravityInfluencePolicy.collisionRoute(self);
-        if (route == GravityInfluencePolicy.CollisionRoute.VANILLA) return;
-        cir.setReturnValue(cc.sighs.gravityengine.gravity.integration.LivingGravityIntegration.applyPlayerSneakEdge(
-                self, movement, moverType, this.isStayingOnGroundSurface()));
+
+        /*
+         * This seam belongs to the currently executing Entity.move.
+         *
+         * No frozen movement route means the current invocation is not owned by
+         * a GravityEngine movement operation. In that case Vanilla owns
+         * maybeBackOffFromEdge completely.
+         *
+         * Do not reconstruct ownership from the live GravityInfluencePolicy here:
+         * installed geometry/application state may still describe the previous
+         * custom-body state during a handoff.
+         */
+        var route =
+                cc.sighs.gravityengine.gravity.integration.EntityMovementIntegration
+                        .activeMovementCollisionRoute(self);
+
+        if (route == null || route == GravityCollisionRoute.VANILLA) {
+            return;
+        }
+
+        cir.setReturnValue(
+                cc.sighs.gravityengine.gravity.integration.LivingGravityIntegration
+                        .applyPlayerSneakEdge(
+                                self,
+                                movement,
+                                moverType,
+                                this.isStayingOnGroundSurface()
+                        )
+        );
     }
 }
