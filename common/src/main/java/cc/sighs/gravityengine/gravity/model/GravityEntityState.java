@@ -42,11 +42,10 @@ import java.util.Optional;
  */
 public final class GravityEntityState {
     /**
-     * Largest durable revision. Long.MAX_VALUE is excluded so a restored
-     * seed's initial sync revision always has room for evidence resolution.
+     * Largest durable revision, independent of the live synchronization sequence.
      * Exhaustion rejects mutations; it never saturates or wraps a counter.
      */
-    public static final long MAX_DURABLE_ASSIGNMENT_REVISION = Long.MAX_VALUE - 1;
+    public static final long MAX_DURABLE_ASSIGNMENT_REVISION = Long.MAX_VALUE;
     /**
      * Durable provenance of a persisted FIELD assignment.
      *
@@ -182,7 +181,7 @@ public final class GravityEntityState {
     /**
      * Persisted/bootstrap assignment result.
      *
-     * <p>This value is retained for save compatibility, synchronization and
+     * <p>This value is retained for persistence, synchronization and
      * startup reconstruction. It is not the canonical current physical FIELD
      * result once a runtime evaluation exists: a velocity- or time-dependent
      * field may produce a different operation-local result.</p>
@@ -753,9 +752,9 @@ public final class GravityEntityState {
      * snapshot initialization are all discarded: a loaded entity must
      * re-derive them from its destination world.</p>
      *
-     * <p>For compatibility, the new live sync sequence is seeded with the
-     * durable revision. This is only a starting value, not restoration of the
-     * previous entity's network chronology: subsequent evidence-only changes
+     * <p>The new live sync sequence starts at zero independently of the
+     * durable revision. It does not restore the previous entity's network
+     * chronology: subsequent evidence-only changes
      * advance sync independently, and native replica lifecycle/identity owns
      * packet admission. No sync revision is persisted.</p>
      *
@@ -771,7 +770,7 @@ public final class GravityEntityState {
                 assignment.state(),
                 assignment.authority(),
                 assignment.authority() == GravityAuthorityMode.FIELD ? FieldPresence.UNKNOWN : FieldPresence.ABSENT,
-                assignment.revision()
+                0L
         );
         durableFieldContinuity = assignment.fieldContinuity();
         assignmentRevision = assignment.revision();

@@ -174,7 +174,7 @@ def run(args):
             owned = True
         report['artifact'] = {p.name: sha256(p) for p in (TARGET / 'build/libs').glob('*.jar')}
         configuration = {'id': run_id, 'profile': args.profile}
-        code = 'var __GE_RUN = ' + json.dumps(configuration) + ';\n' + (ROOT / 'scripts/autojs/packet-fall.js').read_text(encoding='utf-8')
+        code = 'var __GE_RUN = ' + json.dumps(configuration) + ';\n' + (ROOT / 'scripts/autojs' / (args.scenario + '.js')).read_text(encoding='utf-8')
         result = client.evaluate(code)
         if result.get('runId') != run_id:
             raise RuntimeError('Result does not belong to this invocation')
@@ -231,6 +231,7 @@ if __name__ == '__main__':
     parser.add_argument('--eula-file', help='Existing user-accepted eula.txt, copied unchanged to the isolated directory')
     parser.add_argument('--java-home', default=os.environ.get('JAVA_HOME'))
     parser.add_argument('--profile', choices=['none', 'sable', 'create', 'aeronautics'], default='none')
+    parser.add_argument('--scenario', choices=['packet-fall', 'current-format'], default='packet-fall')
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--startup-timeout', type=int, default=180)
     sys.exit(run(parser.parse_args()))

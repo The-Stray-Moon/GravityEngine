@@ -9,7 +9,6 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * Materializes durable attachments and bootstraps loads without an attachment.
@@ -35,17 +34,7 @@ public final class GravityPersistence {
     @Nullable
     static CompoundTag encodeForSave(GravityPersistenceSlot slot) {
         Objects.requireNonNull(slot, "slot");
-        Optional<cc.sighs.gravityengine.gravity.model.GravityEntityState.StoredAssignment>
-                live = slot.snapshotForSave();
-        if (live.isPresent()) {
-            return GravityPersistenceCodec.encode(live.get()).orElse(null);
-        }
-        /*
-         * An uninterpretable record is preserved verbatim until a later
-         * authoritative assignment supersedes it. Malformed/unsupported data
-         * must never be silently rewritten as default gravity.
-         */
-        return slot.preservedUndecodableRecord();
+        return slot.snapshotForSave().flatMap(GravityPersistenceCodec::encode).orElse(null);
     }
 
     /**
@@ -76,7 +65,7 @@ public final class GravityPersistence {
                         : String.valueOf(holder);
                 LOGGER.warn(
                         "GravityEngine persistence record for entity {} was "
-                                + "rejected as {} and was not applied",
+                                + "rejected as {}; discarded without migration or write-back",
                         owner,
                         decoded.status()
                 );

@@ -4,10 +4,7 @@ package cc.sighs.gravityengine.attitude;
  * Synchronized attitude-control, eligibility and dedicated Elytra dynamics
  * settings.
  *
- * <p><b>Dimension migration.</b> The previous snapshot mixed an angular
- * acceleration source, several rate caps and a gravity-restoring gain. It now
- * exposes real physical quantities so the generic solver never has to guess a
- * unit:</p>
+ * Physical quantities and units used by the generic solver:
  *
  * <table>
  *   <caption>Units</caption>
@@ -20,22 +17,11 @@ package cc.sighs.gravityengine.attitude;
  *   <tr><td>{@code elytraAngularDamping}</td><td>1/s game angular damping coefficient</td></tr>
  * </table>
  *
- * <p>Initial tuning was migrated from the previous
- * {@code elytraRollAngularAccelerationDegPerSec2 = 360} and
- * {@code elytraFlightAlignmentGainPerSecondSquared = 6}. With the default
- * {@code I = 1 inertia-unit}, {@code tau = I * alpha} gives
- * {@code 360 deg/s^2 = 6.283185307179586 rad/s^2 -> tau_roll = 6.283185307179586}
- * and heading gain {@code 6.0}. The old whole-vector
- * {@code elytraAngularDragPerSecond = 2} becomes the generic angular damping
- * coefficient {@code tau = -k * L_world}.</p>
- *
- * <p>The removed {@code elytraGravityAlignmentGain}, {@code elytraMaxGravityScale}
- * and all Elytra rate caps are deliberately absent: gravity no longer restores
- * the body attitude, and terminal angular speed is produced only by finite
- * torque, damping or an explicit rate-limit controller.</p>
+ * <p>Gravity does not restore body attitude. Terminal angular speed is
+ * produced by finite torque, damping or an explicit rate-limit controller.</p>
  */
 public final class BodyAttitudeConfigSnapshot {
-    /** Default GE dynamics profile; every dynamics value migrates by {@code tau = I * alpha}. */
+    /** Default GE dynamics profile in the units above. */
     public static final BodyAttitudeConfigSnapshot DEFAULT =
             new BodyAttitudeConfigSnapshot(
                     0.35D,

@@ -19,8 +19,8 @@ import java.util.UUID;
 /**
  * The {@code assignmentSyncRevision} wire slot carries transient
  * snapshot ordering, not the durable NBT revision.
- * A loaded server state starts this sequence at its durable revision for
- * compatibility, then advances it independently for live truth. It is not a
+ * A loaded server state starts this sequence at zero and advances it
+ * independently for live truth. It is not a
  * persisted network history; replica identity/lifecycle and monotonic snapshot
  * admission remain the owners of stale-message rejection.
  *

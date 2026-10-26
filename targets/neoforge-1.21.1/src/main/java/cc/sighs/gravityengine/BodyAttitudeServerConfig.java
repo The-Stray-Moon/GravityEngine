@@ -27,13 +27,11 @@ public final class BodyAttitudeServerConfig {
             .defineInRange("elytraEffectiveAngularInertia", 1.0, 1.0E-6, 1.0E4);
     private static final ModConfigSpec.DoubleValue ELYTRA_ROLL_TORQUE = B.comment(
             "Sustained player roll torque about the physical flight forward axis, in torque game "
-                    + "units (inertia-unit * rad/s^2). Migrated from 360 deg/s^2 at I = 1, i.e. "
-                    + "tau = I * alpha = 6.283185307179586.")
+                    + "units (inertia-unit * rad/s^2).")
             .defineInRange("elytraRollTorque", 6.283185307179586, 0, 1.0E4);
     private static final ModConfigSpec.DoubleValue ELYTRA_HEADING_GAIN = B.comment(
             "Heading proportional torque per radian of flight-forward direction error, in torque "
-                    + "game units. Migrated from the previous s^-2 flight alignment gain through "
-                    + "tau = I * alpha.")
+                    + "game units.")
             .defineInRange("elytraHeadingTorqueGain", 6.0, 0, 1.0E4);
     private static final ModConfigSpec.DoubleValue ELYTRA_HEADING_DAMPING = B.comment(
             "Heading-only derivative damping torque per rad/s of the angular velocity component "

@@ -7,6 +7,18 @@ scaffolds and do not imply equivalent API integration or runtime acceptance.
 
 ## Dependency and compatibility scope
 
+GravityEngine is unreleased. Only the current API, configuration, attachment
+schemas and network protocol are supported; there are no aliases, migration
+readers or fallback decoders for earlier development versions. Consumers must
+update with the engine. Unsupported attachment versions are rejected with
+diagnostics and discarded without write-back; subsequent saves contain only
+current authoritative state. Network peers must use the matching protocol.
+
+Durable assignment revisions describe saved truth only. Loading starts a fresh
+live synchronization sequence at zero, independently of the durable revision;
+evidence-only updates advance only that live sequence. Native entity lifecycle
+and replica identity continue to govern snapshot admission.
+
 | Supported package | Responsibility |
 | --- | --- |
 | `cc.sighs.gravityengine.api` | Target facade, provider sessions, publication handles, entity adapters and immutable observations. Common observation values share this package. |

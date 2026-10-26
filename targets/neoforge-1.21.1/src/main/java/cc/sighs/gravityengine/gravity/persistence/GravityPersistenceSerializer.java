@@ -29,7 +29,7 @@ public final class GravityPersistenceSerializer
                 GravityPersistenceSlot.forHolder(holder);
         GravityPersistenceCodec.DecodeResult decoded =
                 GravityPersistenceCodec.decodeAttachmentRecord(tag);
-        slot.applyDecoded(decoded, tag);
+        slot.applyDecoded(decoded);
         GravityPersistence.diagnose(holder, decoded);
         return slot;
     }
