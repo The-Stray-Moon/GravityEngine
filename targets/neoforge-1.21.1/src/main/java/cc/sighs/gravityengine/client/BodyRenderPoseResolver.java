@@ -1,11 +1,15 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.BodyAttitudeInput;
 import cc.sighs.gravityengine.attitude.BodyLookResolver;
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeInterpolation;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeComponent;
-import org.joml.Quaterniond;
 import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
+import cc.sighs.gravityengine.math.Quatd;
 import net.minecraft.world.entity.player.Player;
+
 import javax.annotation.Nullable;
 
 /** Pure render conversion. Mouse input belongs to the semantic controller frame. */
@@ -39,7 +43,7 @@ public final class BodyRenderPoseResolver {
         BodyAttitudeRenderSnapshot pose =
                 null;
 
-        Quaterniond displayedPreviousController =
+        Quatd displayedPreviousController =
                 null;
 
         if (state != null) {
@@ -74,7 +78,7 @@ public final class BodyRenderPoseResolver {
 
                                 config.isPresent()
                                 ? cc.sighs.gravityengine.attitude.runtime
-                                  .BodyAttitudeRuntime.Service
+                                  .BodyAttitudeService
                                   .GAME_TICK_SECONDS
                                 : 0.0D,
 
@@ -148,7 +152,7 @@ public final class BodyRenderPoseResolver {
             }
         }
 
-        if (PlayerViewDebugLog.ENABLED) {
+        if (PlayerViewDebugLog.shouldLog(player)) {
             PlayerViewDebugLog.event(
                     player,
                     "presentation-sample",
@@ -197,7 +201,7 @@ public final class BodyRenderPoseResolver {
             BodyAttitudeInput pending, float partialTick,
             cc.sighs.gravityengine.attitude.BodyAttitudeConfigSnapshot config, double seconds,
             double committedRollRadians) {
-        Quaterniond renderBody = BodyAttitudeInterpolation.shortestArc(
+        Quatd renderBody = BodyAttitudeInterpolation.shortestArc(
                 snapshot.state().previousWorldFromBody(), snapshot.state().currentWorldFromBody(), partialTick);
         var view = snapshot.view();
         var requested = BodyLookResolver.resolve(view, pending,

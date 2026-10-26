@@ -1,12 +1,15 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
+import cc.sighs.gravityengine.math.Quatd;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Quaterniond;
 import org.joml.Quaternionf;
 
 public final class GravityRenderTransforms {
@@ -62,8 +65,12 @@ public final class GravityRenderTransforms {
             ClientGravityFrameSampler.RenderSnapshot gravitySnapshot,
             BodyAttitudeRenderSnapshot attitude
     ) {
-        Vec3 bodyUp = AttitudeSpaceTransform.bodyUpWorld(
-                attitude.worldFromBody());
+        Vec3 bodyUp =
+                MinecraftMathAdapter.toMinecraft(
+                        AttitudeSpaceTransform.bodyUpWorld(
+                                attitude.worldFromBody()
+                        )
+                );
         return gravitySnapshot.center().subtract(
                 bodyUp.scale(gravitySnapshot.presentationHalfHeight()));
     }
@@ -79,10 +86,19 @@ public final class GravityRenderTransforms {
         }
         if (attitude == null) {
             return gravitySnapshot.feet().add(
-                    gravitySnapshot.frame().up().scale(visualEyeHeight));
+                    MinecraftMathAdapter.toMinecraft(
+                            gravitySnapshot.frame()
+                                    .up()
+                                    .multiply(visualEyeHeight)
+                    )
+            );
         }
-        Vec3 bodyUp = AttitudeSpaceTransform.bodyUpWorld(
-                attitude.worldFromBody());
+        Vec3 bodyUp =
+                MinecraftMathAdapter.toMinecraft(
+                        AttitudeSpaceTransform.bodyUpWorld(
+                                attitude.worldFromBody()
+                        )
+                );
         return gravitySnapshot.center().add(bodyUp.scale(
                 visualEyeHeight
                         - gravitySnapshot.presentationHalfHeight()));
@@ -111,14 +127,11 @@ public final class GravityRenderTransforms {
     public static Quaternionf attitudeModelRotation(
             BodyAttitudeRenderSnapshot snapshot
     ) {
-        Quaterniond attitude = snapshot.worldFromBody();
-        Quaternionf modelFromCanonical = new Quaternionf().rotationY((float) Math.PI);
-        return new Quaternionf(
-                (float) attitude.x, (float) attitude.y,
-                (float) attitude.z, (float) attitude.w)
-                .normalize()
-                .mul(modelFromCanonical)
-                .normalize();
+        Quatd attitude = snapshot.worldFromBody();
+        return toQuaternionf(
+                attitude.multiply(Quatd.rotationY(Math.PI))
+                        .normalized()
+        );
     }
 
     /**
@@ -129,8 +142,11 @@ public final class GravityRenderTransforms {
     public static Quaternionf shakingDecoration(int entityTickCount) {
         float yawDeltaDegrees = (float) (
                 Math.cos((double) entityTickCount * 3.25D) * Math.PI * 0.4D);
-        return new Quaternionf().rotationY(
-                (float) Math.toRadians(-yawDeltaDegrees));
+        return toQuaternionf(
+                Quatd.rotationY(
+                        Math.toRadians(-yawDeltaDegrees)
+                )
+        );
     }
 
     public static void applyShakingDecoration(PoseStack poseStack, int entityTickCount) {
@@ -153,6 +169,15 @@ public final class GravityRenderTransforms {
                 Mth.lerp(partialTick, entity.xOld, entity.getX()),
                 Mth.lerp(partialTick, entity.yOld, entity.getY()),
                 Mth.lerp(partialTick, entity.zOld, entity.getZ())
+        );
+    }
+
+    private static Quaternionf toQuaternionf(Quatd value) {
+        return new Quaternionf(
+                (float) value.x(),
+                (float) value.y(),
+                (float) value.z(),
+                (float) value.w()
         );
     }
 

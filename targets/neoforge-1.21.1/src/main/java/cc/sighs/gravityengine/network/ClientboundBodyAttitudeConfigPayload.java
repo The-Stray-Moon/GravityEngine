@@ -34,15 +34,12 @@ public record ClientboundBodyAttitudeConfigPayload(
         BodyAttitudeConfigSnapshot c = p.simulation;
         b.writeVarLong(p.generation);
         b.writeDouble(c.lowGravitySwimThresholdRatio());
-        b.writeDouble(Math.toDegrees(c.elytraMaxPitchRateRadiansPerSecond()));
-        b.writeDouble(Math.toDegrees(c.elytraMaxYawRateRadiansPerSecond()));
         b.writeDouble(Math.toDegrees(c.controllerRollRateRadiansPerSecond()));
-        b.writeDouble(Math.toDegrees(
-                c.elytraRollAngularAccelerationRadiansPerSecondSquared()));
-        b.writeDouble(c.elytraGravityAlignmentGainPerSecondSquared()); b.writeDouble(c.elytraAngularDragPerSecond());
-        b.writeDouble(c.elytraMaxGravityScale()); b.writeDouble(c.elytraFlightAlignmentGainPerSecondSquared());
-        b.writeDouble(Math.toDegrees(c.elytraMaxAngularAccelerationRadiansPerSecondSquared()));
-        b.writeDouble(Math.toDegrees(c.elytraMaxAngularSpeedRadiansPerSecond()));
+        b.writeDouble(c.elytraEffectiveAngularInertiaValue());
+        b.writeDouble(c.elytraRollTorque());
+        b.writeDouble(c.elytraHeadingTorqueGain());
+        b.writeDouble(c.elytraHeadingDamping());
+        b.writeDouble(c.elytraAngularDamping());
         b.writeDouble(c.elytraVelocityAlignment()); b.writeDouble(c.elytraVelocityAlignStartSpeed());
         b.writeDouble(c.elytraVelocityAlignFullSpeed());
         b.writeDouble(c.quaternionEpsilon()); b.writeDouble(c.vectorEpsilon());
@@ -53,10 +50,6 @@ public record ClientboundBodyAttitudeConfigPayload(
     private static ClientboundBodyAttitudeConfigPayload decode(FriendlyByteBuf b) {
         long generation = b.readVarLong();
         BodyAttitudeConfigSnapshot c = new BodyAttitudeConfigSnapshot(
-                b.readDouble(),
-                b.readDouble(),
-                b.readDouble(),
-                b.readDouble(),
                 b.readDouble(),
                 b.readDouble(),
                 b.readDouble(),

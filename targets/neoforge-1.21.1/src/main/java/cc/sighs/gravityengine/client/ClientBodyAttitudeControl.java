@@ -1,15 +1,17 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.LocalControllerRoll;
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.BodyAttitudeInput;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeRuntime.Access;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeTickIntegration;
-
 import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
+import cc.sighs.gravityengine.math.Quatd;
 import cc.sighs.gravityengine.network.ServerboundBodyAttitudeStatePayload;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.neoforged.neoforge.network.PacketDistributor;
-import org.joml.Quaterniond;
 
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -38,7 +40,7 @@ public final class ClientBodyAttitudeControl {
         Control control = CONTROLS.computeIfAbsent(player, ignored -> new Control());
         control.yaw += yaw;
         control.pitch += pitch;
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "input-accumulate",
+        if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "input-accumulate",
                 "rawYawDegrees=%s rawPitchDegrees=%s pendingYawDegrees=%s pendingPitchDegrees=%s current=%s",
                 yaw, pitch, control.yaw, control.pitch, control.current);
     }
@@ -48,7 +50,7 @@ public final class ClientBodyAttitudeControl {
         Control control = CONTROLS.computeIfAbsent(player, ignored -> new Control());
         control.current = new BodyAttitudeInput(Math.toRadians(boundedLookDelta(control.pitch)),
                 Math.toRadians(boundedLookDelta(control.yaw)), ClientBodyAttitudeKeys.currentRollAxis());
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "input-freeze",
+        if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "input-freeze",
                 "pendingYawDegrees=%s pendingPitchDegrees=%s frozen=%s", control.yaw, control.pitch, control.current);
         control.yaw = control.pitch = 0;
         boolean available = ClientBodyAttitudeKeys.acceptsInput();
@@ -120,12 +122,21 @@ public final class ClientBodyAttitudeControl {
                              "input-control-step"
                      )) {
 
-            BodyAttitudeTickIntegration.tickAt(
+            var outcome = BodyAttitudeTickIntegration.tickAt(
                     player,
                     control.current,
                     player.tickCount,
                     control.current
             );
+
+            if (outcome == cc.sighs.gravityengine.attitude.runtime.BodyAttitudeService.UpdateOutcome.REJECTED_COMMIT
+                    || outcome == cc.sighs.gravityengine.attitude.runtime.BodyAttitudeService.UpdateOutcome.CONFIG_UNAVAILABLE) {
+                // Look displacement has not committed. Keep it for the next tick/preview;
+                // held roll is sampled afresh rather than accumulating torque intervals.
+                control.yaw += Math.toDegrees(control.current.yawDeltaRadians());
+                control.pitch += Math.toDegrees(control.current.pitchDeltaRadians());
+                return;
+            }
 
             var afterRenderable =
                     component.renderableSnapshot();
@@ -211,7 +222,7 @@ public final class ClientBodyAttitudeControl {
                         renderable.decision()
                                 .controllerRoll()
                                 ? cc.sighs.gravityengine.attitude.runtime
-                                  .BodyAttitudeRuntime.Service
+                                  .BodyAttitudeService
                                   .GAME_TICK_SECONDS
                                 : 0.0D,
 
@@ -223,7 +234,7 @@ public final class ClientBodyAttitudeControl {
                 );
 
         if (!player.isFallFlying()) {
-            Quaterniond previousController =
+            Quatd previousController =
                     renderable.view()
                             .semantic(
                                     renderable.state()
@@ -260,7 +271,7 @@ public final class ClientBodyAttitudeControl {
             if (!state.equals(control.sent)) {
                 send.accept(state.forTransport(control.sequence = Math.incrementExact(control.sequence)));
                 control.sent = state;
-                if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "client-attitude-send", "payload=%s", state);
+                if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "client-attitude-send", "payload=%s", state);
             }
         }
     }
@@ -268,6 +279,19 @@ public final class ClientBodyAttitudeControl {
     static void forgetSentState(Player player) {
         Control control = CONTROLS.get(player);
         if (control != null) control.sent = null;
+    }
+
+    /** Explicit server look replaces earlier unconsumed look and its render
+     * preview; it does not clear the locomotion mode or restart stream sequence. */
+    public static void onExplicitLook(Player player) {
+        Control control = CONTROLS.get(player);
+        if (control != null) {
+            control.yaw = control.pitch = 0;
+            control.current = null;
+            control.rollPresentation = null;
+            control.sent = null;
+        }
+        ClientBodyAttitudeHandoff.remove(player);
     }
 
     public static BodyAttitudeInput pendingLook(Player player) {
@@ -300,7 +324,7 @@ public final class ClientBodyAttitudeControl {
         cc.sighs.gravityengine.player.CharacterControlRuntime.clearMode(player);
     }
     public static void clearLevel() {
-        if (PlayerViewDebugLog.ENABLED) {
+        if (cc.sighs.gravityengine.gravity.debug.BootDebugOptions.viewEnabled()) {
             CONTROLS.forEach(ClientBodyAttitudeControl::traceDiscard);
         }
 
@@ -313,7 +337,7 @@ public final class ClientBodyAttitudeControl {
     }
 
     private static void traceDiscard(Player player, Control control) {
-        if (PlayerViewDebugLog.ENABLED && control != null) PlayerViewDebugLog.event(player, "input-discard",
+        if (PlayerViewDebugLog.shouldLog(player) && control != null) PlayerViewDebugLog.event(player, "input-discard",
                 "pendingYawDegrees=%s pendingPitchDegrees=%s current=%s", control.yaw, control.pitch, control.current);
     }
 

@@ -1,6 +1,7 @@
 package cc.sighs.gravityengine.client;
 
 import cc.sighs.gravityengine.gravity.GravityFrame;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Objects;
@@ -52,8 +53,14 @@ public final class GravityDebugRenderGeometry {
         Objects.requireNonNull(eyeCenter, "eyeCenter");
         Objects.requireNonNull(frame, "frame");
         double halfWidth = bodyWidth * 0.5D;
-        Vec3 axisA = frame.left().reverse().scale(halfWidth);
-        Vec3 axisB = frame.forward().scale(halfWidth);
+        Vec3 axisA =
+                MinecraftMathAdapter.toMinecraft(
+                        frame.left().negate()
+                ).scale(halfWidth);
+        Vec3 axisB =
+                MinecraftMathAdapter.toMinecraft(
+                        frame.forward()
+                ).scale(halfWidth);
         return new EyePlane(
                 eyeCenter,
                 eyeCenter.add(axisA).add(axisB),

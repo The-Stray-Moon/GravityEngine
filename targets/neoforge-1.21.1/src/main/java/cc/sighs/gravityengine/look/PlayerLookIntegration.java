@@ -1,22 +1,18 @@
 package cc.sighs.gravityengine.look;
 
-import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
-import cc.sighs.gravityengine.attitude.BodyAttitudeInput;
-import cc.sighs.gravityengine.attitude.BodyAttitudeState;
-import cc.sighs.gravityengine.attitude.BodyLookControlSample;
-import cc.sighs.gravityengine.attitude.BodyLookResolver;
+import cc.sighs.gravityengine.attitude.*;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeComponent;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeContinuity;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeOwnership;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.look.GravityLocalLook;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
+import cc.sighs.gravityengine.math.Quatd;
 import cc.sighs.gravityengine.math.geometry.BodyOrientation3d;
 import cc.sighs.gravityengine.math.geometry.OrthonormalFrame3d;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.Vec3;
-import org.joml.Quaterniond;
 
 import javax.annotation.Nullable;
 import java.util.Objects;
@@ -161,7 +157,7 @@ public final class PlayerLookIntegration {
                                 .currentWorldFromBody(),
                         config.orElse(cc.sighs.gravityengine.attitude.BodyAttitudeConfigSnapshot.DEFAULT),
                         snapshot.decision().controllerRoll() && config.isPresent()
-                                ? cc.sighs.gravityengine.attitude.runtime.BodyAttitudeRuntime.Service.GAME_TICK_SECONDS : 0);
+                                ? cc.sighs.gravityengine.attitude.runtime.BodyAttitudeService.GAME_TICK_SECONDS : 0);
 
         return new AttitudeLookSample(
                 snapshot,
@@ -173,22 +169,33 @@ public final class PlayerLookIntegration {
             AttitudeLookSample attitude, GravityFrame frame
     ) {
         BodyAttitudeState state = attitude.snapshot().state();
-        Quaterniond worldFromBody = state.currentWorldFromBody();
+        Quatd worldFromBody = state.currentWorldFromBody();
         var semantic = attitude.resolved().nextViewState().semantic(worldFromBody);
         OrthonormalFrame3d local = BodyOrientation3d.frame(semantic.worldFromController());
         // Angles here describe the identity direction in controller coordinates, never absolute look.
         var requested = new AttitudeSpaceTransform.LocalLookAngles(0, 0);
-        Vec3 tangent = semantic.forward().subtract(frame.up().scale(semantic.forward().dot(frame.up())));
-        if (tangent.lengthSqr() < 1e-12) tangent = semantic.up().subtract(frame.up().scale(semantic.up().dot(frame.up())));
-        if (tangent.lengthSqr() < 1e-12) tangent = semantic.left().cross(frame.up());
-        Vec3 zeroPitch = tangent.normalize();
+        var tangent = semantic.forward().subtract(
+                frame.up().multiply(
+                        semantic.forward().dot(frame.up())
+                )
+        );
+        if (tangent.lengthSquared() < 1.0E-12D) {
+            tangent = semantic.up().subtract(
+                    frame.up().multiply(
+                            semantic.up().dot(frame.up())
+                    )
+            );
+        }
+        if (tangent.lengthSquared() < 1.0E-12D) {
+            tangent = semantic.left().cross(frame.up());
+        }
         return new SemanticLookSnapshot(
                 SemanticLookSnapshot.Source.BODY_ATTITUDE,
                 local,
                 requested,
                 attitude.resolved().requestedWorldForward(),
                 attitude.resolved().requestedWorldUp(),
-                zeroPitch
+                tangent.normalized()
         );
     }
 
@@ -206,7 +213,11 @@ public final class PlayerLookIntegration {
                         explicitYaw, explicitPitch),
                 look.forward(),
                 look.up(),
-                GravityLocalLook.toWorld(frame, explicitYaw, 0.0F).forward()
+                GravityLocalLook.toWorld(
+                        frame,
+                        explicitYaw,
+                        0.0F
+                ).forward()
         );
     }
 
@@ -220,9 +231,13 @@ public final class PlayerLookIntegration {
                 OrthonormalFrame3d.IDENTITY,
                 new AttitudeSpaceTransform.LocalLookAngles(
                         explicitYaw, explicitPitch),
-                entity.calculateViewVector(explicitPitch, explicitYaw),
-                entity.calculateViewVector(explicitPitch - 90.0F, explicitYaw),
-                entity.calculateViewVector(0.0F, explicitYaw)
+                MinecraftMathAdapter.toVec3d(
+                        entity.calculateViewVector(explicitPitch, explicitYaw)),
+                MinecraftMathAdapter.toVec3d(
+                        entity.calculateViewVector(
+                                explicitPitch - 90.0F, explicitYaw)),
+                MinecraftMathAdapter.toVec3d(
+                        entity.calculateViewVector(0.0F, explicitYaw))
         );
     }
 

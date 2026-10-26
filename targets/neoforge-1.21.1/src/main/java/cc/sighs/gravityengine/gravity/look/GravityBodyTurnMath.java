@@ -2,6 +2,7 @@ package cc.sighs.gravityengine.gravity.look;
 
 import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
 import cc.sighs.gravityengine.gravity.GravityFrame;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
@@ -96,7 +97,10 @@ public final class GravityBodyTurnMath {
                 semanticViewForwardWorld, "semanticViewForwardWorld");
         AttitudeSpaceTransform.TangentHeading semantic =
                 AttitudeSpaceTransform.gravityTangentHeading(
-                        frame, semanticViewForwardWorld);
+                        frame,
+                        MinecraftMathAdapter.toVec3d(
+                                semanticViewForwardWorld
+                        ));
         return semantic.tangentLengthSquared()
                 <= SEMANTIC_HEADING_EPSILON_SQUARED
                 ? fallbackYaw
@@ -151,7 +155,10 @@ public final class GravityBodyTurnMath {
         Objects.requireNonNull(worldDisplacement, "worldDisplacement");
         AttitudeSpaceTransform.TangentHeading heading =
                 AttitudeSpaceTransform.gravityTangentHeading(
-                        frame, worldDisplacement
+                        frame,
+                        MinecraftMathAdapter.toVec3d(
+                                worldDisplacement
+                        )
                 );
 
         float targetBodyYaw = currentBodyYaw;

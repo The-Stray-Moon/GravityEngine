@@ -1,14 +1,16 @@
 package cc.sighs.gravityengine.network;
 
-import cc.sighs.gravityengine.attitude.*;
-import cc.sighs.gravityengine.attitude.runtime.*;
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.attitude.BodyAttitudeConstraintKind;
+import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeComponent;
+import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeStreamEpochService;
+import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeTransactionCoordinator;
 import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
+import cc.sighs.gravityengine.math.Quatd;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.PacketDistributor;
-import org.joml.Quaterniond;
 
 import java.util.Objects;
 
@@ -19,7 +21,7 @@ public final class BodyAttitudeReplicationService {
     private BodyAttitudeReplicationService() {}
     public static void syncToPlayer(ServerPlayer receiver, Player target) {
         prepareServerSnapshot(target);
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(target, "server-attitude-tracking-send",
+        if (PlayerViewDebugLog.shouldLog(target)) PlayerViewDebugLog.event(target, "server-attitude-tracking-send",
                 "receiver=%s", receiver.getUUID());
         PacketDistributor.sendToPlayer(
                 receiver, ClientboundBodyAttitudeStatePayload.from(target));
@@ -28,7 +30,7 @@ public final class BodyAttitudeReplicationService {
 
     public static void syncSelf(ServerPlayer player) {
         prepareServerSnapshot(player);
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "server-attitude-self-send", "");
+        if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "server-attitude-self-send", "");
         PacketDistributor.sendToPlayer(
                 player, ClientboundBodyAttitudeStatePayload.from(player));
         syncConfig(player);
@@ -136,18 +138,11 @@ public final class BodyAttitudeReplicationService {
             long authoritativeRevision,
             long streamEpoch,
             long configGeneration,
-            Quaterniond worldFromBody,
-            Vec3 angularVelocityWorld,
+            Quatd worldFromBody,
+            Vec3d angularVelocityWorld,
             float viewLocalYaw,
             float viewLocalPitch
     ) {
-        public ServerDebugSnapshot {
-            worldFromBody = new Quaterniond(worldFromBody);
-        }
-
-        @Override public Quaterniond worldFromBody() {
-            return new Quaterniond(worldFromBody);
-        }
     }
 
     private static void prepareServerSnapshot(Player player) {
@@ -168,5 +163,4 @@ public final class BodyAttitudeReplicationService {
                     );
         }
     }
-
 }

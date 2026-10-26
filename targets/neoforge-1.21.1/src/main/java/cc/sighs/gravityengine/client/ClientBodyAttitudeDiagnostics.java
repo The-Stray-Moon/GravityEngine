@@ -1,13 +1,18 @@
 package cc.sighs.gravityengine.client;
 
-import cc.sighs.gravityengine.attitude.*;
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.attitude.AngularMomentumState;
+import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import cc.sighs.gravityengine.attitude.BodyAttitudeConstraintKind;
+import cc.sighs.gravityengine.attitude.BodyRelativeViewState;
+import cc.sighs.gravityengine.attitude.SemanticView;
 import cc.sighs.gravityengine.attitude.runtime.*;
+import cc.sighs.gravityengine.math.Quatd;
 import cc.sighs.gravityengine.network.ClientboundBodyAttitudeStatePayload;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.Vec3;
-import org.joml.Quaterniond;
+
 import javax.annotation.Nullable;
-import java.util.*;
+import java.util.Objects;
 
 /** Read-only diagnostics of local control and installed remote state. No display pose or animation state. */
 public final class ClientBodyAttitudeDiagnostics {
@@ -37,6 +42,14 @@ public final class ClientBodyAttitudeDiagnostics {
                     input.rollAxis(),
                     component.state().currentWorldFromBody(),
                     component.state().angularVelocityWorld(),
+                    component.state().hasAngularDynamics(),
+                    component.state().angularMomentum()
+                            .map(AngularMomentumState::angularMomentumWorld)
+                            .orElse(Vec3d.ZERO),
+                    component.state().effectiveInertia()
+                            .map(cc.sighs.gravityengine.attitude
+                                    .EffectiveAngularInertia::isotropic)
+                            .orElse(0.0D),
                     component.view().localYaw(),
                     component.view().localPitch(),
                     0L, ClientBodyAttitudeSync.pendingCount(), component.authoritativeStreamOpen() ? "LOCAL_STATE" : "NO_STREAM",
@@ -52,6 +65,23 @@ public final class ClientBodyAttitudeDiagnostics {
         RemoteBodyAttitudeLerp.DebugState remote = timeline.debugState();
         ClientboundBodyAttitudeStatePayload current = remote.current();
         if (current == null) return null;
+        AngularMomentumState remoteDynamics =
+                current.dynamicStatePresent()
+
+                        ? BodyAttitudeRuntime.Config
+                        .clientFor(
+                                current.authoritativeConfigGeneration()
+                        )
+                        .map(config ->
+                             new AngularMomentumState(
+                                     current.angularMomentumWorld(),
+                                     config.simulation()
+                                             .elytraEffectiveAngularInertia()
+                             )
+                        )
+                        .orElse(null)
+
+                        : null;
         var projection = BodyRelativeViewState.fromSemantic(new SemanticView(current.worldFromController()),
                 current.worldFromBody(), new AttitudeSpaceTransform.LocalLookAngles(0, 0));
         return new DebugSnapshot(
@@ -63,7 +93,15 @@ public final class ClientBodyAttitudeDiagnostics {
                 current.authoritativeRevision(), current.streamEpoch(),
                 current.authoritativeConfigGeneration(),
                 0.0D,
-                current.worldFromBody(), Vec3.ZERO,
+                current.worldFromBody(),
+                remoteDynamics == null
+                        ? Vec3d.ZERO
+                        : remoteDynamics.angularVelocityWorld(current.worldFromBody()),
+                remoteDynamics != null,
+                remoteDynamics == null
+                        ? Vec3d.ZERO
+                        : remoteDynamics.angularMomentumWorld(),
+                remoteDynamics == null ? 0.0D : remoteDynamics.inertia().isotropic(),
                 projection.localYaw(), projection.localPitch(),
                 remote.snapshotAgeTicks(),
                 ClientBodyAttitudeSync.pendingCount(), remote.lastSyncReason(),
@@ -95,8 +133,15 @@ public final class ClientBodyAttitudeDiagnostics {
             long streamEpoch,
             long configGeneration,
             double rollInput,
-            Quaterniond worldFromBody,
-            Vec3 angularVelocityWorld,
+            Quatd worldFromBody,
+            /** Derived {@code omega_world} in rad/s; zero for kinematic ownership. */
+            Vec3d angularVelocityWorld,
+            /** Whether the canonical physical state is {@code q + L_world + I_body}. */
+            boolean dynamicAngularOwnership,
+            /** Durable {@code L_world} in {@code inertia-unit * rad / s}. */
+            Vec3d angularMomentumWorld,
+            /** Isotropic effective inertia in rotational-inertia game units, or zero. */
+            double effectiveAngularInertia,
             float viewLocalYaw,
             float viewLocalPitch,
             long remoteSnapshotAgeTicks,
@@ -107,14 +152,5 @@ public final class ClientBodyAttitudeDiagnostics {
             PresentationAuthority presentationAuthority,
             BodyAttitudeSuspensionReason suspensionReason
     ) {
-        public DebugSnapshot {
-            worldFromBody = new Quaterniond(worldFromBody);
-        }
-
-        @Override public Quaterniond worldFromBody() {
-            return new Quaterniond(worldFromBody);
-        }
-
     }
-
 }

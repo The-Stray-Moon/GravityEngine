@@ -1,15 +1,11 @@
 package cc.sighs.gravityengine.mixin;
 
 import cc.sighs.gravityengine.client.*;
-import cc.sighs.gravityengine.gravity.debug.GravityDebugLog;
-import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
-import cc.sighs.gravityengine.gravity.look.GravityLocalLook;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import net.minecraft.client.Camera;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Quaternionf;
@@ -77,44 +73,13 @@ public abstract class CameraMixin implements CameraEyeHeightAccess {
     ) {
         this.gravityengine$insideSetup = true;
         this.gravityengine$setupRotationIndex = 0;
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(entity, "camera-setup-before",
-                "detached=%s reverse=%s partialTick=%s", detached, thirdPersonReverse, partialTick);
         try {
             original.call(
                     level, entity, detached, thirdPersonReverse, partialTick);
         } finally {
-            gravityengine$traceCamera(entity, "camera-setup-after");
             this.gravityengine$insideSetup = false;
             this.gravityengine$setupRotationIndex = 0;
         }
-    }
-
-    /** Observe the unified NeoForge rotation installer, including Vanilla fallback
-     * and our cancellable quaternion install. Never resolve another render sample. */
-    @WrapMethod(method = "setRotation(FFF)V", require = 1)
-    private void gravityengine$traceRotation(float yaw, float pitch, float roll, Operation<Void> original) {
-        if (!PlayerViewDebugLog.ENABLED) { original.call(yaw, pitch, roll); return; }
-        try (var trace = PlayerViewDebugLog.begin(this.entity, "camera-rotation",
-                "requestedYaw=%s requestedPitch=%s requestedRoll=%s insideSetup=%s rotationIndex=%s",
-                yaw, pitch, roll, this.gravityengine$insideSetup, this.gravityengine$setupRotationIndex)) {
-            gravityengine$traceCamera(this.entity, "camera-output-before");
-            try {
-                original.call(yaw, pitch, roll);
-            } finally {
-                gravityengine$traceCamera(this.entity, "camera-output-after");
-            }
-        }
-    }
-
-    @Unique
-    private void gravityengine$traceCamera(Entity actor, String event) {
-        if (!PlayerViewDebugLog.ENABLED) return;
-        Camera camera = (Camera) (Object) this;
-        PlayerViewDebugLog.event(actor, event,
-                "camera=%s partialTick=%s yaw=%s pitch=%s roll=%s qCamera=%s forward=%s up=%s left=%s position=%s",
-                Integer.toHexString(System.identityHashCode(camera)), camera.getPartialTickTime(),
-                this.yRot, this.xRot, this.roll, camera.rotation(), camera.getLookVector(), camera.getUpVector(),
-                camera.getLeftVector(), camera.getPosition());
     }
 
     @Override
@@ -148,16 +113,6 @@ public abstract class CameraMixin implements CameraEyeHeightAccess {
                         ((Camera) (Object) this).getPartialTickTime(),
                         yRot, xRot, roll);
         gravityengine$installOrientationState(state);
-        if (GravityDebugLog.ENABLED) {
-            gravityengine$logLook(
-                    entity,
-                    ((Camera) (Object) this).getPartialTickTime(),
-                    yRot,
-                    xRot,
-                    initialSetupRotation,
-                    state
-            );
-        }
         ci.cancel();
     }
 
@@ -170,123 +125,33 @@ public abstract class CameraMixin implements CameraEyeHeightAccess {
             GravityCameraOrientationInstaller.CameraOrientationState state
     ) {
         Quaternionf rotation = ((Camera) (Object) this).rotation();
-        rotation.set(state.rotation());
+        rotation.set(
+                (float) state.rotation().x(),
+                (float) state.rotation().y(),
+                (float) state.rotation().z(),
+                (float) state.rotation().w()
+        );
         Vector3f forwards = ((Camera) (Object) this).getLookVector();
-        forwards.set(state.forwards());
+        forwards.set(
+                (float) state.forwards().x(),
+                (float) state.forwards().y(),
+                (float) state.forwards().z()
+        );
         Vector3f up = ((Camera) (Object) this).getUpVector();
-        up.set(state.up());
+        up.set(
+                (float) state.up().x(),
+                (float) state.up().y(),
+                (float) state.up().z()
+        );
         Vector3f left = ((Camera) (Object) this).getLeftVector();
-        left.set(state.left());
+        left.set(
+                (float) state.left().x(),
+                (float) state.left().y(),
+                (float) state.left().z()
+        );
         this.xRot = state.xRot();
         this.yRot = state.yRot();
         this.roll = state.roll();
-    }
-
-    private static void gravityengine$logLook(
-            Entity entity,
-            float partialTick,
-            float localYaw,
-            float localPitch,
-            boolean initialSetupRotation,
-            GravityCameraOrientationInstaller.CameraOrientationState state
-    ) {
-        if (initialSetupRotation && entity instanceof Player player) {
-            BodyAttitudeRenderSnapshot attitude =
-                    BodyRenderPoseResolver.snapshot(
-                            player, partialTick);
-            if (attitude != null) {
-                BodyAttitudeRenderLookResolver.RenderLookSample playerLook =
-                        BodyAttitudeRenderLookResolver.resolve(
-                                attitude);
-                BodyAttitudeRenderLookResolver.CameraLookSample cameraLook =
-                        BodyAttitudeRenderLookResolver.applyCameraModifier(
-                                playerLook,
-                                player.getViewYRot(partialTick),
-                                player.getViewXRot(partialTick),
-                                localYaw,
-                                localPitch);
-                Vec3 coherentWorldAim =
-                        cc.sighs.gravityengine.attitude.AttitudeSpaceTransform
-                                .worldLookFromBodyAngles(
-                                        attitude.cameraView().worldFromController(),
-                                        playerLook.localLook());
-                double aimErrorDegrees = angleDegrees(
-                        coherentWorldAim,
-                        attitude.semanticWorldForward());
-                GravityDebugLog.log(
-                        entity,
-                        "camera-attitude-look",
-                        "pt=%.4f "
-                                + "rawYaw=%.3f rawPitch=%.3f "
-                                + "requestedWorldAim=%s "
-                                + "coherentLocalYaw=%.3f coherentLocalPitch=%.3f "
-                                + "cameraModifierYaw=%.3f "
-                                + "cameraModifierPitch=%.3f "
-                                + "finalLocalYaw=%.3f finalLocalPitch=%.3f "
-                                + "coherentWorldAim=%s playerWorldAim=%s "
-                                + "renderAimErrorDeg=%.7f "
-                                + "qbody=%s qcamera=%s",
-                        partialTick,
-                        player.getYRot(),
-                        player.getXRot(),
-                        GravityDebugLog.vec(attitude.semanticWorldForward()),
-                        playerLook.localLook().yawDegrees(),
-                        playerLook.localLook().pitchDegrees(),
-                        cameraLook.modifierYaw(),
-                        cameraLook.modifierPitch(),
-                        cameraLook.finalLocalLook().yawDegrees(),
-                        cameraLook.finalLocalLook().pitchDegrees(),
-                        GravityDebugLog.vec(coherentWorldAim),
-                        GravityDebugLog.vec(playerLook.worldLook()),
-                        aimErrorDegrees,
-                        attitude.worldFromBody(),
-                        state.rotation());
-                return;
-            }
-        }
-        var snapshot = cc.sighs.gravityengine.client.ClientGravityFrameSampler.sample(
-                entity,
-                partialTick
-        );
-        Quaternionf expected = GravityLocalLook.cameraQuaternion(
-                snapshot.frame(),
-                localYaw,
-                localPitch,
-                state.roll()
-        );
-        float error = (float) Math.toDegrees(
-                2.0D * Math.acos(Math.min(1.0F, Math.abs(
-                        new Quaternionf(expected).conjugate().mul(state.rotation()).w
-                )))
-        );
-        GravityDebugLog.log(
-                entity,
-                "camera-look",
-                "pt=%.4f localYaw=%.3f localPitch=%.3f roll=%.3f frameDown=%s frameUp=%s qcamera=%s expected=%s orientationError=%.5f forward=%s up=%s left=%s",
-                partialTick,
-                localYaw,
-                localPitch,
-                state.roll(),
-                GravityDebugLog.vec(snapshot.frame().down()),
-                GravityDebugLog.vec(snapshot.frame().up()),
-                state.rotation(),
-                expected,
-                error,
-                GravityDebugLog.vec(new Vec3(
-                        state.forwards().x,
-                        state.forwards().y,
-                        state.forwards().z
-                )),
-                GravityDebugLog.vec(new Vec3(state.up().x, state.up().y, state.up().z)),
-                GravityDebugLog.vec(new Vec3(state.left().x, state.left().y, state.left().z))
-        );
-    }
-
-    private static double angleDegrees(Vec3 first, Vec3 second) {
-        double denominator = Math.sqrt(first.lengthSqr() * second.lengthSqr());
-        if (!(denominator > 0.0D)) return 0.0D;
-        double cosine = Mth.clamp(first.dot(second) / denominator, -1.0D, 1.0D);
-        return Math.toDegrees(Math.acos(cosine));
     }
 
     /**
@@ -329,81 +194,5 @@ public abstract class CameraMixin implements CameraEyeHeightAccess {
             return;
         }
         this.setPosition(eye.x, eye.y, eye.z);
-        if (GravityDebugLog.ENABLED) {
-            gravityengine$logCameraPosition(
-                    entity, partialTick, visualEyeHeight, eye
-            );
-        }
-    }
-
-    private void gravityengine$logCameraPosition(
-            Entity entity,
-            float partialTick,
-            float visualEyeHeight,
-            Vec3 cameraPosition
-    ) {
-        try {
-            Camera self = (Camera) (Object) this;
-            ClientGravityFrameSampler.RenderSnapshot snapshot =
-                    ClientGravityFrameSampler.sample(entity, partialTick);
-            var authoritative = cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess
-                    .authoritativeFrame(entity);
-            Vec3 physicalCenter = cc.sighs.gravityengine.gravity.minecraft.geometry.GravityEntityGeometry.bodyCenter(entity, authoritative);
-            // Translation follows Vanilla history even if no reference frame was
-            // sampled during creative flight. Log that carrier directly.
-            Vec3 previousPosition = new Vec3(entity.xo, entity.yo, entity.zo);
-            Vec3 renderPosition = snapshot.center().subtract(
-                    0.0D, snapshot.presentationHalfHeight(), 0.0D);
-            GravityDebugLog.log(
-                    entity,
-                    "camera-position",
-                    "pose=%s positionAnchor=%s physicalCenter=%s "
-                            + "physicalFrameDown=%s physicalFrameUp=%s "
-                            + "previousPositionAnchor=%s "
-                            + "renderPositionAnchor=%s "
-                            + "renderCenter=%s renderFeet=%s "
-                            + "renderFrameDown=%s renderFrameUp=%s "
-                            + "entityEyeHeight=%.5f cameraEyeOld=%.5f "
-                            + "cameraEye=%.5f visualEye=%.5f "
-                            + "camera=%s qCamera=%s cameraForward=%s "
-                            + "cameraUp=%s cameraLeft=%s pt=%.4f "
-                            + "revision=%d fallback=%s snapshotTick=%d",
-                    entity.getPose(),
-                    GravityDebugLog.vec(entity.position()),
-                    GravityDebugLog.vec(physicalCenter),
-                    GravityDebugLog.vec(authoritative.down()),
-                    GravityDebugLog.vec(authoritative.up()),
-                    GravityDebugLog.vec(previousPosition),
-                    GravityDebugLog.vec(renderPosition),
-                    GravityDebugLog.vec(snapshot.center()),
-                    GravityDebugLog.vec(snapshot.feet()),
-                    GravityDebugLog.vec(snapshot.frame().down()),
-                    GravityDebugLog.vec(snapshot.frame().up()),
-                    entity.getEyeHeight(),
-                    this.eyeHeightOld,
-                    this.eyeHeight,
-                    visualEyeHeight,
-                    GravityDebugLog.vec(cameraPosition),
-                    self.rotation(),
-                    self.getLookVector(),
-                    self.getUpVector(),
-                    self.getLeftVector(),
-                    partialTick,
-                    snapshot.revision(),
-                    snapshot.fallback(),
-                    snapshot.tick()
-            );
-        } catch (RuntimeException failure) {
-            try {
-                GravityDebugLog.log(
-                        entity,
-                        "camera-position",
-                        "debug log failed: %s",
-                        failure.toString()
-                );
-            } catch (RuntimeException ignored) {
-                // Debug instrumentation must never break camera setup.
-            }
-        }
     }
 }

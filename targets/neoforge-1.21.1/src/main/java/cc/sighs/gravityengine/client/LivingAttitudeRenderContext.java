@@ -1,6 +1,9 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+
 import javax.annotation.Nullable;
 import java.util.ArrayDeque;
 import java.util.Objects;
@@ -122,7 +125,7 @@ public final class LivingAttitudeRenderContext {
 
             // Only the anatomical model is limited. Gameplay aim can wait beyond
             // this joint against the displayed actor frame.
-            this.modelLook = this.attitude.modelLook(maxHeadDegrees);
+            this.modelLook = ControllerHeadPresentation.modelLook(this.attitude);
             this.modelLookComputed = true;
             return this.modelLook;
         }

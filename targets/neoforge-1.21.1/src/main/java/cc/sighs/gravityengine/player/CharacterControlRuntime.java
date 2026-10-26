@@ -1,10 +1,9 @@
 package cc.sighs.gravityengine.player;
 
 import cc.sighs.gravityengine.attitude.BodyAttitudeConfigSnapshot;
-import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeRuntime;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeControlPolicyResolver;
+import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeRuntime;
 import cc.sighs.gravityengine.attitude.runtime.MinecraftBodyAttitudeSnapshotAdapter;
-
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.minecraft.access.CharacterControlAccess;
 import cc.sighs.gravityengine.gravity.movement.*;
@@ -192,9 +191,14 @@ public final class CharacterControlRuntime {
                         config
                 );
 
-        mode.retainIfEligible(swimEligible);
+        mode.retainIfEligible(swimEligible,
+                CharacterLocomotionControlPolicyResolver.lowGravitySwimMayContinue(
+                        state, eligible, groundFacts, frame, config));
 
         if (cache.consumeSprintIntent(logicalStep)) {
+            if (cc.sighs.gravityengine.gravity.debug.GravityDebugLog.shouldLog(player))
+                cc.sighs.gravityengine.gravity.debug.GravityDebugLog.log(player, "sprint-intent-consumed",
+                        "eligible=%s terminal=%s state=%s strength=%s", swimEligible, terminalSupportAtStepStart, state, frame.strength());
             mode.pressSprintIntent(swimEligible);
         }
 
@@ -214,18 +218,18 @@ public final class CharacterControlRuntime {
     private static Optional<Boolean> liveTerminalSupport(Player player) {
         return cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess
                 .cast(player)
-                .gravityengine$gravityComponent().runtime()
+                .gravityengine$gravityComponent().operationState()
                 .completedEndpointGround()
                 .map(
-                        cc.sighs.gravityengine.gravity.runtime.GravityRuntimeState
+                        cc.sighs.gravityengine.gravity.runtime.GravityOperationState
                                 .CompletedEndpointGround::terminalSupported
                 );
     }
 
     /**
-     * Unknown physical endpoints bootstrap the receiving contract through
-     * ordinary policy. The gameplay carrier is captured separately and never
-     * supplies terminal support.
+     * Unknown physical endpoints cannot activate a mode or revoke an existing
+     * selection by themselves. The gameplay carrier is captured separately and
+     * never supplies terminal support.
      */
     public static CharacterGroundFacts groundFacts(
             Player player,

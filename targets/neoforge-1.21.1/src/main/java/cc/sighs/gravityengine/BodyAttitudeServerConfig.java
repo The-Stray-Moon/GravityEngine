@@ -17,19 +17,32 @@ public final class BodyAttitudeServerConfig {
             "Gravity strength relative to Vanilla below which low-gravity swim eligibility opens. "
                     + "Ordinary ground/air motion is always reference-aligned and never depends on this ratio.")
             .defineInRange("lowGravitySwimThresholdRatio", .35, .01, 2);
-    private static final ModConfigSpec.DoubleValue PITCH_RATE = d("elytraMaxPitchRateDegPerSec", 120, .01, 2000);
-    private static final ModConfigSpec.DoubleValue YAW_RATE = d("elytraMaxYawRateDegPerSec", 120, .01, 2000);
     private static final ModConfigSpec.DoubleValue ROLL_RATE = B.comment(
-            "Held controller roll speed in free attitude; also the Elytra roll rate cap.").defineInRange("controllerRollRateDegPerSec", 180, .01, 2000);
-    private static final ModConfigSpec.DoubleValue ROLL_ACCEL = d("elytraRollAngularAccelerationDegPerSec2", 360, .01, 5000);
-    private static final ModConfigSpec.DoubleValue GRAVITY_GAIN = B.comment("Belly-to-gravity rotation error (radians) times gain (s^-2) and capped g ratio gives rad/s^2.").defineInRange("elytraGravityAlignmentGainPerSecondSquared", 8.0, 0, 1000);
-    private static final ModConfigSpec.DoubleValue ANGULAR_DRAG = B.comment("Passive angular drag coefficient in s^-1; applied to world angular velocity in rad/s.").defineInRange("elytraAngularDragPerSecond", 2.0, 0, 100);
-    private static final ModConfigSpec.DoubleValue MAX_GRAVITY_SCALE = d("elytraMaxGravityScale", 4, 0, 100);
-    private static final ModConfigSpec.DoubleValue FLIGHT_GAIN = B.comment(
-            "Forward direction error (radians) times this gain (s^-2) gives flight alignment rad/s^2.")
-            .defineInRange("elytraFlightAlignmentGainPerSecondSquared", 6.0, 0, 1000);
-    private static final ModConfigSpec.DoubleValue ELYTRA_ACCEL = d("elytraMaxAngularAccelerationDegPerSec2", 720, .01, 3000);
-    private static final ModConfigSpec.DoubleValue ELYTRA_SPEED = d("elytraMaxAngularSpeedDegPerSec", 300, .01, 2000);
+            "Held controller roll speed for the geometric SemanticView / FREE_ATTITUDE path only. "
+                    + "Elytra physical roll is a torque, not this rate.")
+            .defineInRange("controllerRollRateDegPerSec", 180, .01, 2000);
+    private static final ModConfigSpec.DoubleValue ELYTRA_INERTIA = B.comment(
+            "Effective isotropic angular inertia of the dynamic Elytra flight attitude, in "
+                    + "rotational-inertia game units. Not entity mass.")
+            .defineInRange("elytraEffectiveAngularInertia", 1.0, 1.0E-6, 1.0E4);
+    private static final ModConfigSpec.DoubleValue ELYTRA_ROLL_TORQUE = B.comment(
+            "Sustained player roll torque about the physical flight forward axis, in torque game "
+                    + "units (inertia-unit * rad/s^2). Migrated from 360 deg/s^2 at I = 1, i.e. "
+                    + "tau = I * alpha = 6.283185307179586.")
+            .defineInRange("elytraRollTorque", 6.283185307179586, 0, 1.0E4);
+    private static final ModConfigSpec.DoubleValue ELYTRA_HEADING_GAIN = B.comment(
+            "Heading proportional torque per radian of flight-forward direction error, in torque "
+                    + "game units. Migrated from the previous s^-2 flight alignment gain through "
+                    + "tau = I * alpha.")
+            .defineInRange("elytraHeadingTorqueGain", 6.0, 0, 1.0E4);
+    private static final ModConfigSpec.DoubleValue ELYTRA_HEADING_DAMPING = B.comment(
+            "Heading-only derivative damping torque per rad/s of the angular velocity component "
+                    + "that changes the flight forward direction. It never brakes axial roll.")
+            .defineInRange("elytraHeadingDamping", 0.0, 0, 1.0E3);
+    private static final ModConfigSpec.DoubleValue ELYTRA_ANGULAR_DAMPING = B.comment(
+            "Generic game angular damping coefficient k in s^-1 with tau = -k * L_world. "
+                    + "Zero disables it exactly and restores momentum conservation.")
+            .defineInRange("elytraAngularDamping", 2.0, 0, 100);
     private static final ModConfigSpec.DoubleValue VELOCITY_ALIGNMENT = d("elytraVelocityAlignment", .35, 0, 1);
     private static final ModConfigSpec.DoubleValue VELOCITY_START = d("elytraVelocityAlignStartSpeed", .1, 0, 100);
     private static final ModConfigSpec.DoubleValue VELOCITY_FULL = d("elytraVelocityAlignFullSpeed", 1, .001, 100);
@@ -66,16 +79,12 @@ public final class BodyAttitudeServerConfig {
     static BodyAttitudeConfigSnapshot snapshot() {
         return new BodyAttitudeConfigSnapshot(
                 LOW_GRAVITY_SWIM_THRESHOLD.get(),
-                PITCH_RATE.get(),
-                YAW_RATE.get(),
                 ROLL_RATE.get(),
-                ROLL_ACCEL.get(),
-                GRAVITY_GAIN.get(),
-                ANGULAR_DRAG.get(),
-                MAX_GRAVITY_SCALE.get(),
-                FLIGHT_GAIN.get(),
-                ELYTRA_ACCEL.get(),
-                ELYTRA_SPEED.get(),
+                ELYTRA_INERTIA.get(),
+                ELYTRA_ROLL_TORQUE.get(),
+                ELYTRA_HEADING_GAIN.get(),
+                ELYTRA_HEADING_DAMPING.get(),
+                ELYTRA_ANGULAR_DAMPING.get(),
                 VELOCITY_ALIGNMENT.get(),
                 VELOCITY_START.get(),
                 VELOCITY_FULL.get(),

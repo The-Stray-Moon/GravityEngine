@@ -1,21 +1,66 @@
 package cc.sighs.gravityengine.attitude;
 
-/** Synchronized controller roll speed, eligibility and dedicated Elytra alignment settings.
- * Rate/acceleration constructor values are degrees/s and degrees/s^2; exposed values are radians.
- * Direction gains are s^-2, drag s^-1, and gravity scale is dimensionless. */
+/**
+ * Synchronized attitude-control, eligibility and dedicated Elytra dynamics
+ * settings.
+ *
+ * <p><b>Dimension migration.</b> The previous snapshot mixed an angular
+ * acceleration source, several rate caps and a gravity-restoring gain. It now
+ * exposes real physical quantities so the generic solver never has to guess a
+ * unit:</p>
+ *
+ * <table>
+ *   <caption>Units</caption>
+ *   <tr><td>{@code controllerRollRate}</td><td>degrees/s input, radians/s exposed
+ *       (SemanticView / FREE_ATTITUDE geometric roll only)</td></tr>
+ *   <tr><td>{@code elytraEffectiveAngularInertia}</td><td>rotational-inertia game units</td></tr>
+ *   <tr><td>{@code elytraRollTorque}</td><td>torque game units (inertia-unit * rad/s^2)</td></tr>
+ *   <tr><td>{@code elytraHeadingTorqueGain}</td><td>torque game units per radian of heading error</td></tr>
+ *   <tr><td>{@code elytraHeadingDamping}</td><td>torque game units per rad/s of heading-only angular velocity</td></tr>
+ *   <tr><td>{@code elytraAngularDamping}</td><td>1/s game angular damping coefficient</td></tr>
+ * </table>
+ *
+ * <p>Initial tuning was migrated from the previous
+ * {@code elytraRollAngularAccelerationDegPerSec2 = 360} and
+ * {@code elytraFlightAlignmentGainPerSecondSquared = 6}. With the default
+ * {@code I = 1 inertia-unit}, {@code tau = I * alpha} gives
+ * {@code 360 deg/s^2 = 6.283185307179586 rad/s^2 -> tau_roll = 6.283185307179586}
+ * and heading gain {@code 6.0}. The old whole-vector
+ * {@code elytraAngularDragPerSecond = 2} becomes the generic angular damping
+ * coefficient {@code tau = -k * L_world}.</p>
+ *
+ * <p>The removed {@code elytraGravityAlignmentGain}, {@code elytraMaxGravityScale}
+ * and all Elytra rate caps are deliberately absent: gravity no longer restores
+ * the body attitude, and terminal angular speed is produced only by finite
+ * torque, damping or an explicit rate-limit controller.</p>
+ */
 public final class BodyAttitudeConfigSnapshot {
-    public static final BodyAttitudeConfigSnapshot DEFAULT = new BodyAttitudeConfigSnapshot( 0.35, 120, 120, 180, 360, 8, 2, 4, 6, 720, 300, 0.35, 0.1, 1, 1e-08, 1e-10, 0.05, 8);
+    /** Default GE dynamics profile; every dynamics value migrates by {@code tau = I * alpha}. */
+    public static final BodyAttitudeConfigSnapshot DEFAULT =
+            new BodyAttitudeConfigSnapshot(
+                    0.35D,
+                    180.0D,
+                    1.0D,
+                    6.283185307179586D,
+                    6.0D,
+                    0.0D,
+                    2.0D,
+                    0.35D,
+                    0.1D,
+                    1.0D,
+                    1.0E-8D,
+                    1.0E-10D,
+                    0.05D,
+                    8
+            );
+
     private final double lowGravitySwimThresholdRatio;
-    private final double elytraMaxPitchRateRadiansPerSecond;
-    private final double elytraMaxYawRateRadiansPerSecond;
     private final double controllerRollRateRadiansPerSecond;
-    private final double elytraRollAngularAccelerationRadiansPerSecondSquared;
-    private final double elytraGravityAlignmentGainPerSecondSquared;
-    private final double elytraAngularDragPerSecond;
-    private final double elytraMaxGravityScale;
-    private final double elytraFlightAlignmentGainPerSecondSquared;
-    private final double elytraMaxAngularAccelerationRadiansPerSecondSquared;
-    private final double elytraMaxAngularSpeedRadiansPerSecond;
+    private final double elytraEffectiveAngularInertia;
+    private final double elytraRollTorque;
+    private final double elytraHeadingTorqueGain;
+    private final double elytraHeadingDamping;
+    private final double elytraAngularDamping;
     private final double elytraVelocityAlignment;
     private final double elytraVelocityAlignStartSpeed;
     private final double elytraVelocityAlignFullSpeed;
@@ -23,144 +68,232 @@ public final class BodyAttitudeConfigSnapshot {
     private final double vectorEpsilon;
     private final double maxSubstepSeconds;
     private final int maxSubsteps;
+
     public BodyAttitudeConfigSnapshot(
             double lowGravitySwimThresholdRatio,
-            double elytraMaxPitchRate,
-            double elytraMaxYawRate,
-            double controllerRollRate,
-            double elytraRollAngularAcceleration,
-            double elytraGravityAlignmentGainPerSecondSquared,
-            double elytraAngularDragPerSecond,
-            double elytraMaxGravityScale,
-            double elytraFlightAlignmentGainPerSecondSquared,
-            double elytraMaxAngularAcceleration,
-            double elytraMaxAngularSpeed,
+            double controllerRollRateDegreesPerSecond,
+            double elytraEffectiveAngularInertia,
+            double elytraRollTorque,
+            double elytraHeadingTorqueGain,
+            double elytraHeadingDamping,
+            double elytraAngularDamping,
             double elytraVelocityAlignment,
             double elytraVelocityAlignStartSpeed,
             double elytraVelocityAlignFullSpeed,
             double quaternionEpsilon,
             double vectorEpsilon,
             double maxSubstepSeconds,
-            int maxSubsteps) {
-        if (!Double.isFinite(lowGravitySwimThresholdRatio)) throw new IllegalArgumentException("lowGravitySwimThresholdRatio must be finite");
-        if (!Double.isFinite(elytraMaxPitchRate)) throw new IllegalArgumentException("elytraMaxPitchRate must be finite");
-        if (!Double.isFinite(elytraMaxYawRate)) throw new IllegalArgumentException("elytraMaxYawRate must be finite");
-        if (!Double.isFinite(controllerRollRate)) throw new IllegalArgumentException("controllerRollRate must be finite");
-        if (!Double.isFinite(elytraRollAngularAcceleration)) throw new IllegalArgumentException("elytraRollAngularAcceleration must be finite");
-        if (!Double.isFinite(elytraGravityAlignmentGainPerSecondSquared)) throw new IllegalArgumentException("elytraGravityAlignmentGainPerSecondSquared must be finite");
-        if (!Double.isFinite(elytraAngularDragPerSecond)) throw new IllegalArgumentException("elytraAngularDragPerSecond must be finite");
-        if (!Double.isFinite(elytraMaxAngularAcceleration)) throw new IllegalArgumentException("elytraMaxAngularAcceleration must be finite");
-        if (!Double.isFinite(elytraMaxAngularSpeed)) throw new IllegalArgumentException("elytraMaxAngularSpeed must be finite");
-        if (!Double.isFinite(elytraVelocityAlignment)) throw new IllegalArgumentException("elytraVelocityAlignment must be finite");
-        if (!Double.isFinite(elytraVelocityAlignStartSpeed)) throw new IllegalArgumentException("elytraVelocityAlignStartSpeed must be finite");
-        if (!Double.isFinite(elytraVelocityAlignFullSpeed)) throw new IllegalArgumentException("elytraVelocityAlignFullSpeed must be finite");
-        if (!Double.isFinite(quaternionEpsilon)) throw new IllegalArgumentException("quaternionEpsilon must be finite");
-        if (!Double.isFinite(vectorEpsilon)) throw new IllegalArgumentException("vectorEpsilon must be finite");
-        if (!Double.isFinite(maxSubstepSeconds)) throw new IllegalArgumentException("maxSubstepSeconds must be finite");
-        if (elytraVelocityAlignment < 0.0D
+            int maxSubsteps
+    ) {
+        if (!Double.isFinite(lowGravitySwimThresholdRatio)
+                || lowGravitySwimThresholdRatio <= 0.0D) {
+            throw new IllegalArgumentException(
+                    "lowGravitySwimThresholdRatio must be finite and positive");
+        }
+        if (!Double.isFinite(controllerRollRateDegreesPerSecond)
+                || controllerRollRateDegreesPerSecond <= 0.0D) {
+            throw new IllegalArgumentException(
+                    "controllerRollRate must be finite and positive");
+        }
+        if (!Double.isFinite(elytraEffectiveAngularInertia)
+                || elytraEffectiveAngularInertia <= 0.0D) {
+            throw new IllegalArgumentException(
+                    "elytraEffectiveAngularInertia must be finite and "
+                            + "strictly positive");
+        }
+        if (!Double.isFinite(elytraRollTorque) || elytraRollTorque < 0.0D) {
+            throw new IllegalArgumentException(
+                    "elytraRollTorque must be finite and non-negative");
+        }
+        if (!Double.isFinite(elytraHeadingTorqueGain)
+                || elytraHeadingTorqueGain < 0.0D) {
+            throw new IllegalArgumentException(
+                    "elytraHeadingTorqueGain must be finite and non-negative");
+        }
+        if (!Double.isFinite(elytraHeadingDamping)
+                || elytraHeadingDamping < 0.0D) {
+            throw new IllegalArgumentException(
+                    "elytraHeadingDamping must be finite and non-negative");
+        }
+        if (!Double.isFinite(elytraAngularDamping)
+                || elytraAngularDamping < 0.0D) {
+            throw new IllegalArgumentException(
+                    "elytraAngularDamping must be finite and non-negative; "
+                            + "zero is the required conservation configuration");
+        }
+        if (!Double.isFinite(elytraVelocityAlignment)
+                || elytraVelocityAlignment < 0.0D
                 || elytraVelocityAlignment > 1.0D) {
             throw new IllegalArgumentException(
                     "elytraVelocityAlignment must be in [0, 1], got "
-                            + elytraVelocityAlignment
-            );
+                            + elytraVelocityAlignment);
         }
-
-        if (elytraVelocityAlignStartSpeed < 0.0D) {
+        if (!Double.isFinite(elytraVelocityAlignStartSpeed)
+                || elytraVelocityAlignStartSpeed < 0.0D) {
             throw new IllegalArgumentException(
                     "elytraVelocityAlignStartSpeed must be nonnegative, got "
-                            + elytraVelocityAlignStartSpeed
-            );
+                            + elytraVelocityAlignStartSpeed);
         }
-
+        if (!Double.isFinite(elytraVelocityAlignFullSpeed)
+                || elytraVelocityAlignFullSpeed <= 0.0D) {
+            throw new IllegalArgumentException(
+                    "elytraVelocityAlignFullSpeed must be finite and positive");
+        }
         if (elytraVelocityAlignStartSpeed >= elytraVelocityAlignFullSpeed) {
             throw new IllegalArgumentException(
                     "elytraVelocityAlignStartSpeed must be strictly less than "
                             + "elytraVelocityAlignFullSpeed; start="
                             + elytraVelocityAlignStartSpeed
                             + ", full="
-                            + elytraVelocityAlignFullSpeed
-            );
+                            + elytraVelocityAlignFullSpeed);
         }
-        if (maxSubsteps < 1) throw new IllegalArgumentException("invalid substep count");
-        if (lowGravitySwimThresholdRatio <= 0) throw new IllegalArgumentException("lowGravitySwimThresholdRatio must be positive");
+        if (!Double.isFinite(quaternionEpsilon) || quaternionEpsilon <= 0.0D) {
+            throw new IllegalArgumentException(
+                    "quaternionEpsilon must be finite and positive");
+        }
+        if (!Double.isFinite(vectorEpsilon) || vectorEpsilon <= 0.0D) {
+            throw new IllegalArgumentException(
+                    "vectorEpsilon must be finite and positive");
+        }
+        if (!Double.isFinite(maxSubstepSeconds)
+                || maxSubstepSeconds <= 0.0D) {
+            throw new IllegalArgumentException(
+                    "maxSubstepSeconds must be finite and positive");
+        }
+        if (maxSubsteps < 1) {
+            throw new IllegalArgumentException("invalid substep count");
+        }
+
         this.lowGravitySwimThresholdRatio = lowGravitySwimThresholdRatio;
-        if (elytraMaxPitchRate <= 0) throw new IllegalArgumentException("elytraMaxPitchRate must be positive");
-        this.elytraMaxPitchRateRadiansPerSecond = Math.toRadians(elytraMaxPitchRate);
-        if (elytraMaxYawRate <= 0) throw new IllegalArgumentException("elytraMaxYawRate must be positive");
-        this.elytraMaxYawRateRadiansPerSecond = Math.toRadians(elytraMaxYawRate);
-        if (controllerRollRate <= 0) throw new IllegalArgumentException("controllerRollRate must be positive");
-        this.controllerRollRateRadiansPerSecond = Math.toRadians(controllerRollRate);
-        if (elytraRollAngularAcceleration <= 0) throw new IllegalArgumentException("elytraRollAngularAcceleration must be positive");
-        this.elytraRollAngularAccelerationRadiansPerSecondSquared = Math.toRadians(elytraRollAngularAcceleration);
-        if (elytraGravityAlignmentGainPerSecondSquared < 0) throw new IllegalArgumentException("elytraGravityAlignmentGainPerSecondSquared must be nonnegative");
-        this.elytraGravityAlignmentGainPerSecondSquared = elytraGravityAlignmentGainPerSecondSquared;
-        if (elytraAngularDragPerSecond < 0) throw new IllegalArgumentException("elytraAngularDragPerSecond must be nonnegative");
-        this.elytraAngularDragPerSecond = elytraAngularDragPerSecond;
-        if (!Double.isFinite(elytraMaxGravityScale) || elytraMaxGravityScale < 0) throw new IllegalArgumentException("elytraMaxGravityScale must be finite and nonnegative");
-        this.elytraMaxGravityScale = elytraMaxGravityScale;
-        if (!Double.isFinite(elytraFlightAlignmentGainPerSecondSquared) || elytraFlightAlignmentGainPerSecondSquared < 0) throw new IllegalArgumentException("elytraFlightAlignmentGainPerSecondSquared must be finite and nonnegative");
-        this.elytraFlightAlignmentGainPerSecondSquared = elytraFlightAlignmentGainPerSecondSquared;
-        if (elytraMaxAngularAcceleration <= 0) throw new IllegalArgumentException("elytraMaxAngularAcceleration must be positive");
-        this.elytraMaxAngularAccelerationRadiansPerSecondSquared = Math.toRadians(elytraMaxAngularAcceleration);
-        if (elytraMaxAngularSpeed <= 0) throw new IllegalArgumentException("elytraMaxAngularSpeed must be positive");
-        this.elytraMaxAngularSpeedRadiansPerSecond = Math.toRadians(elytraMaxAngularSpeed);
+        this.controllerRollRateRadiansPerSecond =
+                Math.toRadians(controllerRollRateDegreesPerSecond);
+        this.elytraEffectiveAngularInertia = elytraEffectiveAngularInertia;
+        this.elytraRollTorque = elytraRollTorque;
+        this.elytraHeadingTorqueGain = elytraHeadingTorqueGain;
+        this.elytraHeadingDamping = elytraHeadingDamping;
+        this.elytraAngularDamping = elytraAngularDamping;
         this.elytraVelocityAlignment = elytraVelocityAlignment;
         this.elytraVelocityAlignStartSpeed = elytraVelocityAlignStartSpeed;
-        if (elytraVelocityAlignFullSpeed <= 0) throw new IllegalArgumentException("elytraVelocityAlignFullSpeed must be positive");
         this.elytraVelocityAlignFullSpeed = elytraVelocityAlignFullSpeed;
-        if (quaternionEpsilon <= 0) throw new IllegalArgumentException("quaternionEpsilon must be positive");
         this.quaternionEpsilon = quaternionEpsilon;
-        if (vectorEpsilon <= 0) throw new IllegalArgumentException("vectorEpsilon must be positive");
         this.vectorEpsilon = vectorEpsilon;
-        if (maxSubstepSeconds <= 0) throw new IllegalArgumentException("maxSubstepSeconds must be positive");
         this.maxSubstepSeconds = maxSubstepSeconds;
         this.maxSubsteps = maxSubsteps;
-        double maximumSourceAcceleration = Math.PI * elytraGravityAlignmentGainPerSecondSquared * elytraMaxGravityScale
-                + Math.PI * elytraFlightAlignmentGainPerSecondSquared
-                + elytraAngularDragPerSecond * elytraMaxAngularSpeedRadiansPerSecond
-                + elytraRollAngularAccelerationRadiansPerSecondSquared;
-        if (!Double.isFinite(maximumSourceAcceleration))
-            throw new IllegalArgumentException("Elytra acceleration sources must have a finite bound");
     }
-    public double lowGravitySwimThresholdRatio() { return lowGravitySwimThresholdRatio; }
-    public double elytraMaxPitchRateRadiansPerSecond() { return elytraMaxPitchRateRadiansPerSecond; }
-    public double elytraMaxYawRateRadiansPerSecond() { return elytraMaxYawRateRadiansPerSecond; }
-    public double controllerRollRateRadiansPerSecond() { return controllerRollRateRadiansPerSecond; }
-    public double elytraRollAngularAccelerationRadiansPerSecondSquared() { return elytraRollAngularAccelerationRadiansPerSecondSquared; }
-    public double elytraGravityAlignmentGainPerSecondSquared() { return elytraGravityAlignmentGainPerSecondSquared; }
-    public double elytraAngularDragPerSecond() { return elytraAngularDragPerSecond; }
-    public double elytraMaxGravityScale() { return elytraMaxGravityScale; }
-    public double elytraFlightAlignmentGainPerSecondSquared() { return elytraFlightAlignmentGainPerSecondSquared; }
-    public double elytraMaxAngularAccelerationRadiansPerSecondSquared() { return elytraMaxAngularAccelerationRadiansPerSecondSquared; }
-    public double elytraMaxAngularSpeedRadiansPerSecond() { return elytraMaxAngularSpeedRadiansPerSecond; }
-    public double elytraVelocityAlignment() { return elytraVelocityAlignment; }
-    public double elytraVelocityAlignStartSpeed() { return elytraVelocityAlignStartSpeed; }
-    public double elytraVelocityAlignFullSpeed() { return elytraVelocityAlignFullSpeed; }
-    public double quaternionEpsilon() { return quaternionEpsilon; }
-    public double vectorEpsilon() { return vectorEpsilon; }
-    public double maxSubstepSeconds() { return maxSubstepSeconds; }
-    public int maxSubsteps() { return maxSubsteps; }
-    @Override public boolean equals(Object other) {
-        if (!(other instanceof BodyAttitudeConfigSnapshot c)) return false;
+
+    public double lowGravitySwimThresholdRatio() {
+        return lowGravitySwimThresholdRatio;
+    }
+
+    /** SemanticView / FREE_ATTITUDE geometric controller roll rate in rad/s. */
+    public double controllerRollRateRadiansPerSecond() {
+        return controllerRollRateRadiansPerSecond;
+    }
+
+    public EffectiveAngularInertia elytraEffectiveAngularInertia() {
+        return EffectiveAngularInertia.of(elytraEffectiveAngularInertia);
+    }
+
+    /** Raw inertia value in rotational-inertia game units. */
+    public double elytraEffectiveAngularInertiaValue() {
+        return elytraEffectiveAngularInertia;
+    }
+
+    /** Sustained roll torque about the flight forward axis, torque game units. */
+    public double elytraRollTorque() {
+        return elytraRollTorque;
+    }
+
+    /** Heading proportional torque per radian of forward-direction error. */
+    public double elytraHeadingTorqueGain() {
+        return elytraHeadingTorqueGain;
+    }
+
+    /** Heading-only derivative damping per rad/s of heading angular velocity. */
+    public double elytraHeadingDamping() {
+        return elytraHeadingDamping;
+    }
+
+    /** Generic game angular damping in 1/s; zero disables it exactly. */
+    public double elytraAngularDamping() {
+        return elytraAngularDamping;
+    }
+
+    public double elytraVelocityAlignment() {
+        return elytraVelocityAlignment;
+    }
+
+    public double elytraVelocityAlignStartSpeed() {
+        return elytraVelocityAlignStartSpeed;
+    }
+
+    public double elytraVelocityAlignFullSpeed() {
+        return elytraVelocityAlignFullSpeed;
+    }
+
+    public double quaternionEpsilon() {
+        return quaternionEpsilon;
+    }
+
+    public double vectorEpsilon() {
+        return vectorEpsilon;
+    }
+
+    public double maxSubstepSeconds() {
+        return maxSubstepSeconds;
+    }
+
+    public int maxSubsteps() {
+        return maxSubsteps;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (!(other instanceof BodyAttitudeConfigSnapshot c)) {
+            return false;
+        }
         return maxSubsteps == c.maxSubsteps
-                && Double.compare(lowGravitySwimThresholdRatio, c.lowGravitySwimThresholdRatio) == 0
-                && Double.compare(elytraMaxPitchRateRadiansPerSecond, c.elytraMaxPitchRateRadiansPerSecond) == 0
-                && Double.compare(elytraMaxYawRateRadiansPerSecond, c.elytraMaxYawRateRadiansPerSecond) == 0
-                && Double.compare(controllerRollRateRadiansPerSecond, c.controllerRollRateRadiansPerSecond) == 0
-                && Double.compare(elytraRollAngularAccelerationRadiansPerSecondSquared, c.elytraRollAngularAccelerationRadiansPerSecondSquared) == 0
-                && Double.compare(elytraGravityAlignmentGainPerSecondSquared, c.elytraGravityAlignmentGainPerSecondSquared) == 0
-                && Double.compare(elytraAngularDragPerSecond, c.elytraAngularDragPerSecond) == 0
-                && Double.compare(elytraMaxGravityScale, c.elytraMaxGravityScale) == 0
-                && Double.compare(elytraFlightAlignmentGainPerSecondSquared, c.elytraFlightAlignmentGainPerSecondSquared) == 0
-                && Double.compare(elytraMaxAngularAccelerationRadiansPerSecondSquared, c.elytraMaxAngularAccelerationRadiansPerSecondSquared) == 0
-                && Double.compare(elytraMaxAngularSpeedRadiansPerSecond, c.elytraMaxAngularSpeedRadiansPerSecond) == 0
-                && Double.compare(elytraVelocityAlignment, c.elytraVelocityAlignment) == 0
-                && Double.compare(elytraVelocityAlignStartSpeed, c.elytraVelocityAlignStartSpeed) == 0
-                && Double.compare(elytraVelocityAlignFullSpeed, c.elytraVelocityAlignFullSpeed) == 0
+                && Double.compare(lowGravitySwimThresholdRatio,
+                        c.lowGravitySwimThresholdRatio) == 0
+                && Double.compare(controllerRollRateRadiansPerSecond,
+                        c.controllerRollRateRadiansPerSecond) == 0
+                && Double.compare(elytraEffectiveAngularInertia,
+                        c.elytraEffectiveAngularInertia) == 0
+                && Double.compare(elytraRollTorque, c.elytraRollTorque) == 0
+                && Double.compare(elytraHeadingTorqueGain,
+                        c.elytraHeadingTorqueGain) == 0
+                && Double.compare(elytraHeadingDamping,
+                        c.elytraHeadingDamping) == 0
+                && Double.compare(elytraAngularDamping,
+                        c.elytraAngularDamping) == 0
+                && Double.compare(elytraVelocityAlignment,
+                        c.elytraVelocityAlignment) == 0
+                && Double.compare(elytraVelocityAlignStartSpeed,
+                        c.elytraVelocityAlignStartSpeed) == 0
+                && Double.compare(elytraVelocityAlignFullSpeed,
+                        c.elytraVelocityAlignFullSpeed) == 0
                 && Double.compare(quaternionEpsilon, c.quaternionEpsilon) == 0
                 && Double.compare(vectorEpsilon, c.vectorEpsilon) == 0
                 && Double.compare(maxSubstepSeconds, c.maxSubstepSeconds) == 0;
     }
-    @Override public int hashCode() { return java.util.Objects.hash(
-            lowGravitySwimThresholdRatio, elytraMaxPitchRateRadiansPerSecond, elytraMaxYawRateRadiansPerSecond, controllerRollRateRadiansPerSecond, elytraRollAngularAccelerationRadiansPerSecondSquared, elytraGravityAlignmentGainPerSecondSquared, elytraAngularDragPerSecond, elytraMaxGravityScale, elytraFlightAlignmentGainPerSecondSquared, elytraMaxAngularAccelerationRadiansPerSecondSquared, elytraMaxAngularSpeedRadiansPerSecond, elytraVelocityAlignment, elytraVelocityAlignStartSpeed, elytraVelocityAlignFullSpeed, quaternionEpsilon, vectorEpsilon, maxSubstepSeconds, maxSubsteps); }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(
+                lowGravitySwimThresholdRatio,
+                controllerRollRateRadiansPerSecond,
+                elytraEffectiveAngularInertia,
+                elytraRollTorque,
+                elytraHeadingTorqueGain,
+                elytraHeadingDamping,
+                elytraAngularDamping,
+                elytraVelocityAlignment,
+                elytraVelocityAlignStartSpeed,
+                elytraVelocityAlignFullSpeed,
+                quaternionEpsilon,
+                vectorEpsilon,
+                maxSubstepSeconds,
+                maxSubsteps
+        );
+    }
 }

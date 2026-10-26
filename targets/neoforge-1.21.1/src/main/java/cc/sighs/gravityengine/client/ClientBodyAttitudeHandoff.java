@@ -1,11 +1,13 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.SemanticView;
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeInterpolation;
 import cc.sighs.gravityengine.gravity.look.GravityLocalLook;
+import cc.sighs.gravityengine.math.Quatd;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Player;
-import org.joml.Quaterniond;
-import org.joml.Quaternionf;
 
 import javax.annotation.Nullable;
 import java.util.Map;
@@ -81,6 +83,7 @@ public final class ClientBodyAttitudeHandoff {
                 new Transition(
                         player.tickCount,
                         source,
+                        controllerOffset(source, gravityTarget(player, 0.0F, retiringAttitude)),
                         Target.GRAVITY
                 )
         );
@@ -151,6 +154,7 @@ public final class ClientBodyAttitudeHandoff {
                 new Transition(
                         player.tickCount,
                         source,
+                        controllerOffset(source, activeTarget),
                         Target.ATTITUDE
                 )
         );
@@ -269,6 +273,7 @@ public final class ClientBodyAttitudeHandoff {
         return blend(
                 transition.source(),
                 target,
+                transition.controllerOffset(),
                 smooth
         );
     }
@@ -291,30 +296,25 @@ public final class ClientBodyAttitudeHandoff {
                         player.yBodyRot
                 );
 
-        Quaterniond targetBody =
-                asDouble(
-                        GravityLocalLook.lookQuaternion(
-                                gravity.frame(),
-                                bodyYaw,
-                                0.0F,
-                                0.0F
-                        )
+        Quatd targetBody =
+                GravityLocalLook.lookQuaternion(
+                        gravity.frame(),
+                        bodyYaw,
+                        0.0F,
+                        0.0F
                 );
 
-        float viewYaw =
-                player.getViewYRot(partialTick);
+        // Native carriers are already updated by current mouse input. Interpolate
+        // the retiring offset, never the current local player's input again.
+        float viewYaw = player.getYRot();
+        float viewPitch = player.getXRot();
 
-        float viewPitch =
-                player.getViewXRot(partialTick);
-
-        Quaterniond targetController =
-                asDouble(
-                        GravityLocalLook.lookQuaternion(
-                                gravity.frame(),
-                                viewYaw,
-                                viewPitch,
-                                0.0F
-                        )
+        Quatd targetController =
+                GravityLocalLook.lookQuaternion(
+                        gravity.frame(),
+                        viewYaw,
+                        viewPitch,
+                        0.0F
                 );
 
         SemanticView view =
@@ -345,25 +345,18 @@ public final class ClientBodyAttitudeHandoff {
     private static BodyAttitudeRenderSnapshot blend(
             BodyAttitudeRenderSnapshot source,
             BodyAttitudeRenderSnapshot target,
+            Quatd controllerOffset,
             double progress
     ) {
-        Quaterniond body =
+        Quatd body =
                 BodyAttitudeInterpolation.shortestArc(
                         source.worldFromBody(),
                         target.worldFromBody(),
                         progress
                 );
 
-        Quaterniond controller =
-                BodyAttitudeInterpolation.shortestArc(
-                        source.cameraView()
-                                .worldFromController(),
-
-                        target.cameraView()
-                                .worldFromController(),
-
-                        progress
-                );
+        Quatd controller = controllerAt(controllerOffset,
+                target.cameraView().worldFromController(), progress);
 
         SemanticView view =
                 new SemanticView(
@@ -387,6 +380,18 @@ public final class ClientBodyAttitudeHandoff {
                 target.authoritativeStreamEpoch(),
                 target.authoritativeConfigGeneration(), target.attitudeContract()
         );
+    }
+
+    private static Quatd controllerOffset(BodyAttitudeRenderSnapshot source,
+            BodyAttitudeRenderSnapshot target) {
+        return target.cameraView().worldFromController().conjugate()
+                .multiply(source.cameraView().worldFromController()).normalized();
+    }
+
+    /** Interpolate only the retiring display offset; live input is never weighted by progress. */
+    static Quatd controllerAt(Quatd offset, Quatd liveController, double progress) {
+        return liveController.multiply(BodyAttitudeInterpolation.shortestArc(
+                offset, Quatd.IDENTITY, progress)).normalized();
     }
 
     private static boolean isActive(
@@ -416,17 +421,6 @@ public final class ClientBodyAttitudeHandoff {
         return ticks + partialTick;
     }
 
-    private static Quaterniond asDouble(
-            Quaternionf value
-    ) {
-        return new Quaterniond(
-                value.x,
-                value.y,
-                value.z,
-                value.w
-        ).normalize();
-    }
-
     private enum Target {
         GRAVITY,
         ATTITUDE
@@ -435,6 +429,7 @@ public final class ClientBodyAttitudeHandoff {
     private record Transition(
             long startTick,
             BodyAttitudeRenderSnapshot source,
+            Quatd controllerOffset,
             Target target
     ) {
         Transition {
@@ -447,6 +442,7 @@ public final class ClientBodyAttitudeHandoff {
                     target,
                     "target"
             );
+            Objects.requireNonNull(controllerOffset, "controllerOffset");
         }
     }
 }

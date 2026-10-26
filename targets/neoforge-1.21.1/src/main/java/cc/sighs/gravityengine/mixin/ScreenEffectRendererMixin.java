@@ -2,6 +2,7 @@ package cc.sighs.gravityengine.mixin;
 
 import cc.sighs.gravityengine.client.ClientGravityFrameSampler;
 import cc.sighs.gravityengine.client.GravityPresentationIntegration;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.ScreenEffectRenderer;
@@ -87,9 +88,12 @@ public abstract class ScreenEffectRendererMixin {
             );
         }
 
-        Vec3 right = snapshot.frame().left().reverse();
-        Vec3 up = snapshot.frame().up();
-        Vec3 forward = snapshot.frame().forward();
+        Vec3 right = MinecraftMathAdapter.toMinecraft(
+                        snapshot.frame().left().negate());
+        Vec3 up = MinecraftMathAdapter.toMinecraft(
+                        snapshot.frame().up());
+        Vec3 forward = MinecraftMathAdapter.toMinecraft(
+                        snapshot.frame().forward());
 
         /*
          * Vanilla:

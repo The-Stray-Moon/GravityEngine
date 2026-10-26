@@ -11,29 +11,49 @@ import java.util.stream.Collectors;
 /** Opt-in view-write attribution. Reads existing actor state only: no component
  * creation, field sampling, semantic input resolution or presentation sampling. */
 public final class PlayerViewDebugLog {
-    public static final boolean ENABLED = Boolean.getBoolean("gravityengine.debugView");
-    private static final boolean STACKS = Boolean.parseBoolean(
-            System.getProperty("gravityengine.debugViewStacks", "true"));
+    private static final DebugTraceLevel LEVEL = BootDebugOptions.viewLevel();
+    private static final boolean STACKS = BootDebugOptions.viewStacksEnabled();
     private static final AtomicLong SEQUENCE = new AtomicLong();
     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
 
     private PlayerViewDebugLog() {}
 
+    public static boolean shouldLog(Entity entity) {
+        return LEVEL.enabled() && DebugFilter.matches(entity);
+    }
+
+    public static boolean shouldLog(java.util.UUID entityId, net.minecraft.world.level.Level level) {
+        return LEVEL.enabled() && DebugFilter.matches(entityId, level);
+    }
+
+    /** Packet may precede entity creation. Filter the packet's actual identity and owning Level. */
+    public static void packet(java.util.UUID entityId, net.minecraft.world.level.Level level,
+            String event, String fields, Object... args) {
+        if (!shouldLog(entityId, level)) return;
+        try {
+            DebugLogPolicy.summary(LOGGER, "[SMR-VIEW] event={} uuid={} side={} {}",
+                    event, entityId, level == null ? "unavailable" : level.isClientSide() ? "C" : "S",
+                    String.format(Locale.ROOT, fields, args));
+        } catch (RuntimeException failure) {
+            LOGGER.debug("Packet view diagnostic unavailable", failure);
+        }
+    }
+
     public static boolean playerEnabled(Entity entity) {
-        return ENABLED && entity instanceof Player;
+        return shouldLog(entity) && entity instanceof Player;
     }
 
     public static void event(Entity entity, String event, String fields, Object... args) {
-        if (!ENABLED) return;
+        if (!shouldLog(entity)) return;
         emit(entity, event, 0, "event", fields, args);
     }
 
     public static Scope begin(Entity entity, String event) {
-        return ENABLED ? begin(entity, event, "") : Scope.NOOP;
+        return shouldLog(entity) ? begin(entity, event, "") : Scope.NOOP;
     }
 
     public static void mutation(Entity entity, String event, BodyAttitudeComponent.Snapshot before) {
-        if (!ENABLED) return;
+        if (!shouldLog(entity)) return;
         try {
             event(entity, event, "beforeAttitude={%s}", attitude(before));
         } catch (RuntimeException failure) {
@@ -44,7 +64,7 @@ public final class PlayerViewDebugLog {
     /** Invocation-local pairing, including exceptional exits. No ThreadLocal or
      * entity-owned trace history is introduced. Callers pass immutable operands. */
     public static Scope begin(Entity entity, String event, String fields, Object... args) {
-        if (!ENABLED) return Scope.NOOP;
+        if (!shouldLog(entity)) return Scope.NOOP;
         long span = SEQUENCE.incrementAndGet();
         emit(entity, event, span, "before", fields, args);
         return new Scope(entity, event, span);
@@ -53,9 +73,16 @@ public final class PlayerViewDebugLog {
     private static void emit(Entity entity, String event, long span, String phase,
                              String fields, Object... args) {
         try {
-            LOGGER.info("[SMR-VIEW] seq={} span={} phase={} event={} thread={} actor={} {} state={} caller={}",
-                    SEQUENCE.incrementAndGet(), span, phase, event, Thread.currentThread().getName(),
-                    identity(entity), String.format(Locale.ROOT, fields, args), state(entity), caller());
+            String message = "[SMR-VIEW] seq={} span={} phase={} event={} thread={} actor={} {} state={} caller={}";
+            Object[] values = {SEQUENCE.incrementAndGet(), span, phase, event, Thread.currentThread().getName(),
+                    identity(entity), String.format(Locale.ROOT, fields, args), state(entity), caller()};
+            if (event.startsWith("attitude-logical-commit/") || event.equals("attitude-invalidate")
+                    || event.equals("attitude-retire-stream") || event.equals("attitude-open-stream")
+                    || event.equals("client-position-packet") || event.equals("client-attitude-send")) {
+                DebugLogPolicy.summary(LOGGER, message, values);
+            } else {
+                DebugLogPolicy.trace(LOGGER, message, values);
+            }
         } catch (RuntimeException failure) {
             // An unavailable construction/lifecycle sample must not affect gameplay.
             LOGGER.debug("View diagnostic unavailable", failure);
@@ -119,7 +146,7 @@ public final class PlayerViewDebugLog {
     }
 
     public static final class Scope implements AutoCloseable {
-        private static final Scope NOOP = new Scope(null, "", 0);
+        public static final Scope NOOP = new Scope(null, "", 0);
         private final Entity entity;
         private final String event;
         private final long span;

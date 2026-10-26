@@ -1,23 +1,34 @@
 package cc.sighs.gravityengine.network;
 
 import cc.sighs.gravityengine.GravityEngine;
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.attitude.BodyRelativeViewState;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeComponent;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeContinuity;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeOwnership;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeSuspensionReason;
+import cc.sighs.gravityengine.math.Quatd;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
-import org.joml.Quaterniond;
 
 import java.util.Objects;
 import java.util.UUID;
 
-/** Protocol 16 immutable current Qbody/Qcontroller and resolved transient swim mode.
- * Observers interpolate installed quaternions; no raw input or angular momentum is transported. */
+/**
+ * Immutable current Qbody/Qcontroller, the dynamic angular state that must be
+ * installed with it, and the resolved transient swim mode.
+ *
+ * <p>Observers interpolate installed quaternions for presentation only. When
+ * the sender's state was dynamic, the payload also carries the durable
+ * world-space angular momentum {@code L_world}, so a receiver never fabricates
+ * a zero angular velocity for a corrected or replicated dynamic body. A
+ * pose-only handoff is declared explicitly and carries no angular momentum.
+ * Effective inertia is never a wire operand: it belongs to the receiving
+ * control profile/config generation.</p>
+ */
 public record ClientboundBodyAttitudeStatePayload(
         int entityId,
         UUID entityUuid,
@@ -31,9 +42,11 @@ public record ClientboundBodyAttitudeStatePayload(
         BodyAttitudeContinuity continuity,
         BodyAttitudeOwnership ownership,
         BodyAttitudeSuspensionReason suspensionReason,
-        Quaterniond worldFromBody,
-        Quaterniond worldFromController,
-        boolean swimActive
+        Quatd worldFromBody,
+        Quatd worldFromController,
+        boolean swimActive,
+        boolean dynamicStatePresent,
+        Vec3d angularMomentumWorld
 ) implements CustomPacketPayload {
     public static final int HARD_MAX_DIMENSION_ID_CHARACTERS = cc.sighs.gravityengine.protocol.BodyAttitudeProtocolLimits.HARD_MAX_DIMENSION_ID_CHARACTERS;
 
@@ -53,6 +66,7 @@ public record ClientboundBodyAttitudeStatePayload(
         Objects.requireNonNull(suspensionReason, "suspensionReason");
         Objects.requireNonNull(worldFromBody, "worldFromBody");
         Objects.requireNonNull(worldFromController, "worldFromController");
+        Objects.requireNonNull(angularMomentumWorld, "angularMomentumWorld");
         if (dimensionId.toString().length() > HARD_MAX_DIMENSION_ID_CHARACTERS) {
             throw new IllegalArgumentException(
                     "dimensionId exceeds protocol character bound");
@@ -94,9 +108,45 @@ public record ClientboundBodyAttitudeStatePayload(
             throw new IllegalArgumentException(
                     "continuous wire state must be active and initialized");
         }
+        if (!angularMomentumWorld.isFinite()
+                || !Double.isFinite(
+                angularMomentumWorld.lengthSquared()
+        )) {
+            throw new IllegalArgumentException(
+                    "angularMomentumWorld must be finite"
+            );
+        }
+
+        if (dynamicStatePresent) {
+            if (!active
+                    || !initialized
+                    || continuity
+                    != BodyAttitudeContinuity.CONTINUOUS) {
+                throw new IllegalArgumentException(
+                        "dynamic state requires "
+                                + "a continuous active body"
+                );
+            }
+
+            if (angularMomentumWorld.length()
+                    > cc.sighs.gravityengine.protocol
+                    .BodyAttitudeProtocolLimits
+                    .HARD_MAX_ANGULAR_MOMENTUM_MAGNITUDE) {
+                throw new IllegalArgumentException(
+                        "angular momentum exceeds "
+                                + "the protocol sanity bound"
+                );
+            }
+        } else if (!angularMomentumWorld.equals(
+                Vec3d.ZERO
+        )) {
+            throw new IllegalArgumentException(
+                    "a pose-only handoff must not "
+                            + "carry angular momentum"
+            );
+        }
         worldFromBody = BodyAttitudeRepresentation.normalizedCopyOrUnusable(worldFromBody);
         worldFromController = BodyAttitudeRepresentation.normalizedCopyOrUnusable(worldFromController);
-
     }
 
     public boolean hasUsableRepresentation() {
@@ -109,26 +159,37 @@ public record ClientboundBodyAttitudeStatePayload(
                         .component(player);
         BodyAttitudeComponent.Snapshot snapshot = component.snapshot();
         BodyRelativeViewState view = snapshot.view();
+        var state = snapshot.state();
+        var dynamics =
+                state.angularMomentum().orElse(null);
+
         return new ClientboundBodyAttitudeStatePayload(
-                player.getId(), player.getUUID(), player.level().dimension().location(),
+                player.getId(),
+                player.getUUID(),
+                player.level().dimension().location(),
                 snapshot.authoritativeStreamEpoch(),
                 snapshot.authoritativeRevision(),
                 snapshot.authoritativeServerGameTick(),
                 snapshot.authoritativeConfigGeneration(),
-                snapshot.state().initialized(), snapshot.decision().active(),
+                state.initialized(),
+                snapshot.decision().active(),
                 snapshot.continuity(),
                 component.ownership(),
                 snapshot.decision().suspensionReason(),
-                snapshot.state().currentWorldFromBody(),
-                view.semantic(snapshot.state().currentWorldFromBody()).worldFromController(),
-                ((cc.sighs.gravityengine.gravity.minecraft.access.CharacterControlAccess) player).gravityengine$characterMode().swimActive());
+                state.currentWorldFromBody(),
+                view.semantic(
+                        state.currentWorldFromBody()
+                ).worldFromController(),
+                ((cc.sighs.gravityengine.gravity.minecraft.access
+                        .CharacterControlAccess) player)
+                        .gravityengine$characterMode()
+                        .swimActive(),
+                dynamics != null,
+                dynamics == null
+                        ? Vec3d.ZERO
+                        : dynamics.angularMomentumWorld()
+        );
     }
-
-    @Override public Quaterniond worldFromBody() {
-        return new Quaterniond(worldFromBody);
-    }
-
-    @Override public Quaterniond worldFromController() { return new Quaterniond(worldFromController); }
 
     private static void encode(
             FriendlyByteBuf buf,
@@ -146,12 +207,19 @@ public record ClientboundBodyAttitudeStatePayload(
         buf.writeByte(BodyAttitudeWireValues.continuityId(value.continuity()));
         buf.writeByte(BodyAttitudeWireValues.ownershipId(value.ownership()));
         buf.writeByte(BodyAttitudeWireValues.suspensionReasonId(value.suspensionReason()));
-        Quaterniond q = value.worldFromBody;
-        buf.writeDouble(q.x); buf.writeDouble(q.y); buf.writeDouble(q.z); buf.writeDouble(q.w);
-        Quaterniond controller = value.worldFromController;
-        buf.writeDouble(controller.x); buf.writeDouble(controller.y); buf.writeDouble(controller.z); buf.writeDouble(controller.w);
+        Quatd q = value.worldFromBody;
+        buf.writeDouble(q.x()); buf.writeDouble(q.y()); buf.writeDouble(q.z()); buf.writeDouble(q.w());
+        Quatd controller = value.worldFromController;
+        buf.writeDouble(controller.x()); buf.writeDouble(controller.y()); buf.writeDouble(controller.z()); buf.writeDouble(controller.w());
         buf.writeBoolean(value.swimActive);
+        buf.writeBoolean(value.dynamicStatePresent);
 
+        Vec3d momentum =
+                value.angularMomentumWorld;
+
+        buf.writeDouble(momentum.x());
+        buf.writeDouble(momentum.y());
+        buf.writeDouble(momentum.z());
     }
 
     private static ClientboundBodyAttitudeStatePayload decode(FriendlyByteBuf buf) {
@@ -168,15 +236,41 @@ public record ClientboundBodyAttitudeStatePayload(
         BodyAttitudeOwnership ownership = BodyAttitudeWireValues.ownership(buf.readByte());
         BodyAttitudeSuspensionReason suspensionReason =
                 BodyAttitudeWireValues.suspensionReason(buf.readByte());
-        Quaterniond q = new Quaterniond(
+        Quatd q = new Quatd(
                 buf.readDouble(), buf.readDouble(), buf.readDouble(), buf.readDouble());
-        Quaterniond controller = new Quaterniond(buf.readDouble(), buf.readDouble(), buf.readDouble(), buf.readDouble());
-        boolean swim = buf.readBoolean();
+        Quatd controller = new Quatd(buf.readDouble(), buf.readDouble(), buf.readDouble(), buf.readDouble());
+        boolean swim =
+                buf.readBoolean();
+
+        boolean dynamicStatePresent =
+                buf.readBoolean();
+
+        Vec3d momentum =
+                new Vec3d(
+                        buf.readDouble(),
+                        buf.readDouble(),
+                        buf.readDouble()
+                );
+
         return new ClientboundBodyAttitudeStatePayload(
-                entityId, uuid, dimension, streamEpoch, revision, serverGameTick,
+                entityId,
+                uuid,
+                dimension,
+                streamEpoch,
+                revision,
+                serverGameTick,
                 configGeneration,
-                initialized, active, continuity, ownership, suspensionReason,
-                q, controller, swim);
+                initialized,
+                active,
+                continuity,
+                ownership,
+                suspensionReason,
+                q,
+                controller,
+                swim,
+                dynamicStatePresent,
+                momentum
+        );
     }
 
     @Override public Type<? extends CustomPacketPayload> type() { return TYPE; }

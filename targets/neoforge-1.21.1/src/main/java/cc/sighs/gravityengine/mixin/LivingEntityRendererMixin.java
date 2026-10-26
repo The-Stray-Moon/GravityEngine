@@ -1,5 +1,7 @@
 package cc.sighs.gravityengine.mixin;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
 import cc.sighs.gravityengine.client.BodyRenderPoseResolver;
 import cc.sighs.gravityengine.client.ClientGravityFrameSampler;
@@ -88,11 +90,11 @@ public abstract class LivingEntityRendererMixin<T extends LivingEntity> {
                 LivingAttitudeRenderContext.current();
         boolean replaced = false;
         if (scope != null) {
-            cc.sighs.gravityengine.client.BodyAttitudeRenderSnapshot attitude =
+            cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot attitude =
                     readAttitude(entity, partialTick);
             if (attitude != null
-                    || GravityInfluencePolicy
-                    .usesCustomPresentation(entity)) {
+                    || cc.sighs.gravityengine.client.ClientGravityFrameSampler
+                    .usesPresentation(entity)) {
                 // One immutable gravity snapshot for the whole render; the
                 // snapshot-explicit overload never samples again.
                 ClientGravityFrameSampler.RenderSnapshot gravitySnapshot =
@@ -217,7 +219,7 @@ public abstract class LivingEntityRendererMixin<T extends LivingEntity> {
     }
 
     @Nullable
-    private static cc.sighs.gravityengine.client.BodyAttitudeRenderSnapshot
+    private static cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot
     readAttitude(LivingEntity entity, float partialTick) {
         return entity instanceof Player player
                 ? BodyRenderPoseResolver.snapshot(

@@ -1,6 +1,7 @@
 package cc.sighs.gravityengine.client;
 
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeTransactionCoordinator;
+import cc.sighs.gravityengine.gravity.integration.EntityMovementIntegration;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.entity.player.Player;
@@ -11,7 +12,6 @@ import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
-import cc.sighs.gravityengine.gravity.integration.EntityMovementIntegration;
 
 /**
  * Client disconnect/lifecycle invalidation without retaining players in a

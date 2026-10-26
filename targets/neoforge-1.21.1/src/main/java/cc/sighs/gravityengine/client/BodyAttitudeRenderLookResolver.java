@@ -1,6 +1,9 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
@@ -15,7 +18,12 @@ public final class BodyAttitudeRenderLookResolver {
             BodyAttitudeRenderSnapshot snapshot
     ) {
         Objects.requireNonNull(snapshot, "snapshot");
-        return new RenderLookSample(new AttitudeSpaceTransform.LocalLookAngles(0, 0), snapshot.semanticWorldForward());
+        return new RenderLookSample(
+                new AttitudeSpaceTransform.LocalLookAngles(0, 0),
+                MinecraftMathAdapter.toMinecraft(
+                        snapshot.semanticWorldForward()
+                )
+        );
     }
 
     /**

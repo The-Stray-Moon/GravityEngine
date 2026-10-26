@@ -1,17 +1,19 @@
 package cc.sighs.gravityengine.attitude.runtime;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.attitude.*;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.look.GravityLocalLook;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityLivingAccess;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
+import cc.sighs.gravityengine.math.Quatd;
+import cc.sighs.gravityengine.math.geometry.BodyOrientation3d;
 import net.minecraft.ChatFormatting;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.player.PlayerModelPart;
-import net.minecraft.world.phys.Vec3;
-import org.joml.Quaterniond;
-import org.joml.Quaternionf;
+
 import java.util.Objects;
 import java.util.Optional;
 
@@ -85,7 +87,7 @@ public final class MinecraftBodyAttitudeSnapshotAdapter {
     public static boolean hasEnvironmentalGravity(Player player) {
         var gravity = cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess
                 .cast(player).gravityengine$gravityComponent();
-        if (gravity.effectiveSuppression()
+        if (gravity.state().authoritativeSuppression()
                 != cc.sighs.gravityengine.gravity.model.GravitySuppressionReason.NONE) {
             return false;
         }
@@ -99,7 +101,7 @@ public final class MinecraftBodyAttitudeSnapshotAdapter {
                 player.getYRot(), player.getXRot());
     }
 
-    static Vec3 worldLookForward(Player player, GravityFrame frame, BodyAttitudeInput pendingLook) {
+    static Vec3d worldLookForward(Player player, GravityFrame frame, BodyAttitudeInput pendingLook) {
         BodyAttitudeComponent component = BodyAttitudeRuntime.Access.peek(player);
         if (hasContinuousActiveLook(component)) {
             BodyAttitudeComponent.Snapshot snapshot = component.snapshot();
@@ -107,12 +109,14 @@ public final class MinecraftBodyAttitudeSnapshotAdapter {
             return BodyLookResolver.resolve(snapshot.view(), pendingLook,
                     snapshot.state().currentWorldFromBody(), config.orElse(BodyAttitudeConfigSnapshot.DEFAULT),
                     config.isPresent() && snapshot.decision().controllerRoll()
-                            ? BodyAttitudeRuntime.Service.GAME_TICK_SECONDS : 0).requestedWorldForward();
+                            ? BodyAttitudeService.GAME_TICK_SECONDS : 0).requestedWorldForward();
         }
         GravityFrame scalarFrame = GravityInfluencePolicy.usesGravityLocalLook(player)
                 ? frame : GravityFrame.DEFAULT;
         return GravityLocalLook.toWorld(
-                scalarFrame, player.getYRot(), player.getXRot()).forward();
+                scalarFrame,
+                player.getYRot(),
+                player.getXRot()).forward();
     }
 
     static boolean hasContinuousActiveLook(BodyAttitudeComponent component) {
@@ -137,16 +141,10 @@ public final class MinecraftBodyAttitudeSnapshotAdapter {
             return Optional.of(BodyAttitudeBootstrap.stationary(
                     vanillaElytraWorldFromBody(player, frame)));
         }
-        Quaternionf displayedBaseline = GravityLocalLook.lookQuaternion(
+        Quatd displayedBaseline = GravityLocalLook.lookQuaternion(
                 frame, player.yBodyRot, 0.0F, 0.0F);
-        return Optional.of(BodyAttitudeBootstrap.stationary(
-                new Quaterniond(
-                        displayedBaseline.x,
-                        displayedBaseline.y,
-                        displayedBaseline.z,
-                        displayedBaseline.w
-                )
-        ));
+        return Optional.of(
+                BodyAttitudeBootstrap.stationary(displayedBaseline));
     }
 
     /**
@@ -159,7 +157,7 @@ public final class MinecraftBodyAttitudeSnapshotAdapter {
      * {@code frame.up()} is never encoded a second time as a right-hand
      * rotation axis after {@code frame.rotation()} is already present.</p>
      */
-    private static Quaterniond vanillaElytraWorldFromBody(
+    private static Quatd vanillaElytraWorldFromBody(
             Player player, GravityFrame frame
     ) {
         float flight = (float) player.getFallFlyingTicks();
@@ -173,35 +171,40 @@ public final class MinecraftBodyAttitudeSnapshotAdapter {
          * velocity around frame.up.  With the DEFAULT frame the helper must
          * reproduce the Vanilla value exactly; the parity is covered by tests.
          */
-        Vec3 up = frame.up();
-        Vec3 lookWorld = GravityLocalLook.toWorld(
-                frame, player.getYRot(), player.getXRot()
+        Vec3d up = frame.up();
+        Vec3d lookWorld = GravityLocalLook.toWorld(
+                frame,
+                player.getYRot(),
+                player.getXRot()
         ).forward();
-        Vec3 velocity = player.getDeltaMovement();
-        Vec3 lookTangent = lookWorld.subtract(
-                up.scale(lookWorld.dot(up)));
-        Vec3 velocityTangent = velocity.subtract(
-                up.scale(velocity.dot(up)));
+        Vec3d velocity = MinecraftMathAdapter.toVec3d(
+                player.getDeltaMovement());
+        Vec3d lookTangent = lookWorld.subtract(
+                up.multiply(lookWorld.dot(up)));
+        Vec3d velocityTangent = velocity.subtract(
+                up.multiply(velocity.dot(up)));
         if (isUsableTangent(lookTangent)
                 && isUsableTangent(velocityTangent)) {
             double angle = cc.sighs.gravityengine.attitude.AttitudeSpaceTransform
                     .signedAngleAround(up, lookTangent, velocityTangent);
-            return composeElytraBootstrap(
+            return ElytraBootstrapMath.compose(
                     GravityInfluencePolicy
                             .usesCustomPresentation(player)
-                            ? frame.rotation()
-                            : new Quaternionf(),
+                            ? BodyOrientation3d.quaternion(
+                                    frame.orientation())
+                            : Quatd.IDENTITY,
                     player.yBodyRot,
                     player.getXRot(),
                     blend,
                     angle
             );
         }
-        return composeElytraBootstrap(
+        return ElytraBootstrapMath.compose(
                 GravityInfluencePolicy
                         .usesCustomPresentation(player)
-                        ? frame.rotation()
-                        : new Quaternionf(),
+                        ? BodyOrientation3d.quaternion(
+                                frame.orientation())
+                        : Quatd.IDENTITY,
                 player.yBodyRot,
                 player.getXRot(),
                 blend,
@@ -209,44 +212,8 @@ public final class MinecraftBodyAttitudeSnapshotAdapter {
         );
     }
 
-    /**
-     * Captures the currently displayed Vanilla-compatible Elytra humanoid/root
-     * attitude with the renderer-only Y180 model baseline removed.
-     *
-     * <p>The returned quaternion is the same canonical actor/root Qbody used by
-     * the rest of BodyAttitude state, replication and persistence. It is NOT the
-     * aerodynamic Elytra flight frame.
-     *
-     * <p>Elytra dynamics derives its fixed flight frame from this Qbody through
-     * {@link AttitudeSpaceTransform#elytraForwardWorld(Quaterniond)} and the
-     * corresponding left/dorsal/belly helpers. Never change the stored Qbody
-     * coordinate meaning merely because ELYTRA_ALIGNED is active.</p>
-     */
-    static Quaterniond composeElytraBootstrap(
-            Quaternionf frameRotation,
-            float yBodyRotDegrees,
-            float xRotDegrees,
-            float flightBlend,
-            Double alignmentAngleRadians
-    ) {
-        Quaternionf local = new Quaternionf().rotationY(
-                (float) Math.toRadians(180.0F - yBodyRotDegrees));
-        local.mul(new Quaternionf().rotationX(
-                (float) Math.toRadians(
-                        flightBlend * (-90.0F - xRotDegrees))));
-        if (alignmentAngleRadians != null) {
-            local.mul(new Quaternionf().rotationY(
-                    (float) (double) alignmentAngleRadians));
-        }
-        local.mul(new Quaternionf().rotationY((float) -Math.PI));
-        Quaternionf world = new Quaternionf(
-                Objects.requireNonNull(frameRotation, "frameRotation"))
-                .mul(local);
-        return new Quaterniond(world.x, world.y, world.z, world.w).normalize();
-    }
-
-    private static boolean isUsableTangent(Vec3 tangent) {
-        return tangent.lengthSqr() > 1.0E-12D;
+    private static boolean isUsableTangent(Vec3d tangent) {
+        return tangent.lengthSquared() > 1.0E-12D;
     }
 
     private static boolean hasUpsideDownPresentation(Player player) {

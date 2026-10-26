@@ -1,36 +1,35 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.gravity.GravityFrame;
 import cc.sighs.gravityengine.gravity.look.GravityLocalLook;
-import net.minecraft.util.Mth;
-import org.joml.Quaterniond;
-import org.joml.Quaternionf;
-import org.joml.Vector3f;
+import cc.sighs.gravityengine.math.Quatd;
+import cc.sighs.gravityengine.math.geometry.BodyOrientation3d;
 
 /**
  * Computes the single immutable camera orientation state for one gravity-local
  * look triple.
  *
- * <p>This is the only place that maps {@code GravityLocalLook} into the
- * NeoForge {@code Camera} rest convention. The {@code CameraMixin} is the only
- * component that writes the resulting state into a {@code Camera}; nothing in
- * the production camera path may convert a quaternion back to world Euler.</p>
+ * <p>This is the only place that resolves {@code GravityLocalLook} into the
+ * canonical camera state. The {@code CameraMixin} is the only component that
+ * converts that state into NeoForge {@code Camera} values; nothing in the
+ * production camera path may convert a quaternion back to world Euler.</p>
  */
 public final class GravityCameraOrientationInstaller {
     private GravityCameraOrientationInstaller() {}
 
     /**
      * One immutable camera orientation snapshot. {@code rotation()} is the
-     * authoritative quaternion to install; the three vectors are the camera
+     * authoritative canonical quaternion to present; the three vectors are the camera
      * rest basis after that rotation, and the Euler scalars are the gravity-local
      * look values kept for {@code Camera#getXRot}/{@code getYRot}/{@code getRoll}
      * Vanilla API consumers.
      */
     public record CameraOrientationState(
-            Quaternionf rotation,
-            Vector3f forwards,
-            Vector3f up,
-            Vector3f left,
+            Quatd rotation,
+            Vec3d forwards,
+            Vec3d up,
+            Vec3d left,
             float yRot,
             float xRot,
             float roll
@@ -53,9 +52,9 @@ public final class GravityCameraOrientationInstaller {
                 GravityLocalLook.toWorld(frame, localYaw, localPitch, localRoll);
         return new CameraOrientationState(
                 look.orientation(),
-                toVector(look.forward()),
-                toVector(look.up()),
-                toVector(look.left()),
+                look.forward(),
+                look.up(),
+                look.left(),
                 localYaw,
                 localPitch,
                 localRoll
@@ -65,62 +64,54 @@ public final class GravityCameraOrientationInstaller {
     /** Qcamera = Qcontroller * Qmodifier * camera-rest adapter.
      * Event deltas are camera-only local yaw/pitch/roll; they never update semantic aim. */
     public static CameraOrientationState computeAttitude(
-            Quaterniond worldFromController,
+            Quatd worldFromController,
             float modifierYaw,
             float modifierPitch,
             float cameraLocalRollDegrees
     ) {
-        Quaternionf local = new Quaternionf()
-                .rotationY(-toRadians(modifierYaw))
-                .mul(rotationX(toRadians(modifierPitch)))
-                .mul(rotationZ(toRadians(cameraLocalRollDegrees)));
-        Quaternionf body = new Quaternionf(
-                (float) worldFromController.x,
-                (float) worldFromController.y,
-                (float) worldFromController.z,
-                (float) worldFromController.w
-        ).normalize();
-        Quaternionf orientation = body.mul(local);
-        orientation.mul(CAMERA_BASIS_FLIP);
-        Vector3f forwards = basis(orientation, 0.0F, 0.0F, -1.0F);
-        Vector3f up = basis(orientation, 0.0F, 1.0F, 0.0F);
-        Vector3f left = basis(orientation, -1.0F, 0.0F, 0.0F);
+        Quatd local = Quatd.rotationY(-toRadians(modifierYaw))
+                .multiply(Quatd.rotationX(toRadians(modifierPitch)))
+                .multiply(Quatd.rotationZ(
+                        toRadians(cameraLocalRollDegrees)));
+        Quatd body = BodyOrientation3d.normalized(worldFromController);
+        Quatd orientation = body.multiply(local)
+                .multiply(CAMERA_BASIS_FLIP)
+                .normalized();
+        Vec3d forwards = basis(orientation, 0.0D, 0.0D, -1.0D);
+        Vec3d up = basis(orientation, 0.0D, 1.0D, 0.0D);
+        Vec3d left = basis(orientation, -1.0D, 0.0D, 0.0D);
         return new CameraOrientationState(
                 orientation,
                 forwards,
                 up,
                 left,
-                Mth.wrapDegrees(modifierYaw),
+                wrapDegrees(modifierYaw),
                 modifierPitch,
                 cameraLocalRollDegrees
         );
     }
 
     /** Camera rest basis uses forward=(0,0,-1); canonical look uses (0,0,1). */
-    private static final Quaternionf CAMERA_BASIS_FLIP =
-            new Quaternionf().rotationY((float) Math.PI);
+    private static final Quatd CAMERA_BASIS_FLIP =
+            Quatd.rotationY(Math.PI);
 
-    private static Vector3f basis(Quaternionf q, float x, float y, float z) {
-        return new Vector3f(x, y, z).rotate(q);
+    private static Vec3d basis(Quatd q, double x, double y, double z) {
+        return q.transform(new Vec3d(x, y, z));
     }
 
     private static float toRadians(float degrees) {
         return degrees * (float) (Math.PI / 180.0D);
     }
 
-    private static Quaternionf rotationX(float radians) {
-        return new Quaternionf().rotationX(radians);
-    }
-
-    private static Quaternionf rotationY(float radians) {
-        return new Quaternionf().rotationY(radians);
-    }
-
-    private static Quaternionf rotationZ(float radians) {
-        return new Quaternionf().rotationZ(radians);
-    }
-
-    private static Vector3f toVector(net.minecraft.world.phys.Vec3 value) {
-        return new Vector3f((float) value.x, (float) value.y, (float) value.z);
+    /** Vanilla-compatible angle presentation without a Minecraft dependency. */
+    private static float wrapDegrees(float degrees) {
+        float wrapped = degrees % 360.0F;
+        if (wrapped >= 180.0F) {
+            wrapped -= 360.0F;
+        }
+        if (wrapped < -180.0F) {
+            wrapped += 360.0F;
+        }
+        return wrapped;
     }
 }

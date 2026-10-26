@@ -1,6 +1,7 @@
 package cc.sighs.gravityengine.mixin;
 
 import cc.sighs.gravityengine.client.GravityPresentationIntegration;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.entity.player.PlayerRenderer;
@@ -37,8 +38,8 @@ public abstract class PlayerRendererMixin {
             return;
         }
 
-        if (!GravityInfluencePolicy
-                .usesCustomPresentation(player)) {
+        if (!cc.sighs.gravityengine.client.ClientGravityFrameSampler
+                .usesPresentation(player)) {
             return;
         }
 
@@ -64,9 +65,11 @@ public abstract class PlayerRendererMixin {
                         / 16.0D;
 
         cir.setReturnValue(
-                snapshot.frame()
-                        .down()
-                        .scale(magnitude)
+                MinecraftMathAdapter.toMinecraft(
+                        snapshot.frame()
+                                .down()
+                                .multiply(magnitude)
+                )
         );
     }
 }

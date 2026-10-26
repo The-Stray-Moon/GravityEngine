@@ -1,17 +1,21 @@
 package cc.sighs.gravityengine.client;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeVisualConfigSnapshot;
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeRenderSnapshot;
+
 import cc.sighs.gravityengine.ClientConfig;
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeInterpolation;
 import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeComponent;
-import net.minecraft.world.entity.player.Player;
+import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeContinuity;
+import cc.sighs.gravityengine.math.Quatd;
+import cc.sighs.gravityengine.network.ClientboundBodyAttitudeStatePayload;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
+
+import javax.annotation.Nullable;
 import java.util.Map;
 import java.util.WeakHashMap;
-
-import cc.sighs.gravityengine.attitude.runtime.BodyAttitudeContinuity;
-import cc.sighs.gravityengine.network.ClientboundBodyAttitudeStatePayload;
-import org.joml.Quaterniond;
-import javax.annotation.Nullable;
 
 /** Remote network target -> entity tick approach -> partial-tick interpolation, like Vanilla lerpTo. */
 public final class RemoteBodyAttitudeLerp {
@@ -55,10 +59,10 @@ public final class RemoteBodyAttitudeLerp {
     }
 
     private ClientboundBodyAttitudeStatePayload target;
-    private Quaterniond previousBody;
-    private Quaterniond currentBody;
-    private Quaterniond previousController;
-    private Quaterniond currentController;
+    private Quatd previousBody;
+    private Quatd currentBody;
+    private Quatd previousController;
+    private Quatd currentController;
     private int ticksRemaining;
     private long lastEntityTick = Long.MIN_VALUE;
     private long snapshotAgeTicks;

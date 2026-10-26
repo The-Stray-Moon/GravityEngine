@@ -7,8 +7,13 @@ package cc.sighs.gravityengine.attitude;
  * {@code yRot}/{@code xRot} scalar stream during this interval (radians);
  * they are rate commands for this simulation step and are deliberately never
  * clamped to {@code [-1, 1]}.  Roll is the held-key axis {@code -1/0/+1}
- * semantic. It advances the free controller orientation at the configured rate;
- * Elytra alignment retains its separate actuator semantics.</p>
+ * semantic sampled from held key state, never from a key-repeat event.</p>
+ *
+ * <p>{@code rollAxis} feeds exactly one owner per mode: the FREE_ATTITUDE
+ * geometric SemanticView controller advances the view orientation at the
+ * configured controller roll rate, while ELYTRA_ALIGNED turns the same held
+ * axis into a sustained world-space roll torque about the physical flight
+ * forward axis. The two paths must not be active simultaneously.</p>
  */
 public record BodyAttitudeInput(
         double pitchDeltaRadians,

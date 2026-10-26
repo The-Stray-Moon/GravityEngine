@@ -1,12 +1,14 @@
 package cc.sighs.gravityengine.attitude.runtime;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.attitude.*;
-import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
 import cc.sighs.gravityengine.gravity.GravityFrame;
+import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.Vec3;
+
 import java.util.Objects;
 import java.util.Optional;
 
@@ -33,7 +35,7 @@ public final class BodyAttitudeTickIntegration {
         record ConfigUnavailable() implements TickCapture {}
     }
 
-    public static BodyAttitudeRuntime.Service.UpdateOutcome tickAt(
+    public static BodyAttitudeService.UpdateOutcome tickAt(
             Player player,
             BodyAttitudeInput input,
             long logicalStep,
@@ -42,7 +44,7 @@ public final class BodyAttitudeTickIntegration {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(input, "input");
         TickCapture capture = captureTick(player, input, logicalStep, pendingLook);
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "attitude-control-capture",
+        if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "attitude-control-capture",
                 "logicalStep=%s input=%s pendingLook=%s capture=%s", logicalStep, input, pendingLook,
                 capture.getClass().getSimpleName());
         BodyAttitudeComponent component =
@@ -53,23 +55,25 @@ public final class BodyAttitudeTickIntegration {
                     player, component, suspended, logicalStep);
         }
         if (capture instanceof TickCapture.ConfigUnavailable) {
-            return BodyAttitudeRuntime.Service.UpdateOutcome.CONFIG_UNAVAILABLE;
+            return BodyAttitudeService.UpdateOutcome.CONFIG_UNAVAILABLE;
         }
 
         TickCapture.Ready ready = (TickCapture.Ready) capture;
         BodyAttitudeTickInput tickInput = ready.input();
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "attitude-control-operands",
+        if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "attitude-control-operands",
                 "decision=%s ownership=%s frameUp=%s lookScalars=%s bootstrapLook=%s bootstrap=%s",
                 tickInput.decision(), tickInput.ownership(), tickInput.frame().up(), tickInput.lookScalars(),
-                tickInput.bootstrapLookForward(), tickInput.bootstrap());
+                MinecraftMathAdapter.toMinecraft(
+                        tickInput.bootstrapLookForward()),
+                tickInput.bootstrap());
         BodyAttitudeTransactionPrecondition precondition =
                 new BodyAttitudeTransactionPrecondition(component.snapshot());
         BodyAttitudePreparation preparation =
-                BodyAttitudeRuntime.Service.prepare(
+                BodyAttitudeService.prepare(
                         component, tickInput, precondition);
         BodyAttitudeLogicalCandidate candidate =
                 preparation.candidate();
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(player, "attitude-local-prepare",
+        if (PlayerViewDebugLog.shouldLog(player)) PlayerViewDebugLog.event(player, "attitude-local-prepare",
                 "outcome=%s kind=%s bootstrapped=%s requestedQ=%s requestedView=%s",
                 preparation.outcome(), candidate == null ? "absent" : candidate.kind(),
                 candidate != null && candidate.bootstrapped(),
@@ -81,13 +85,13 @@ public final class BodyAttitudeTickIntegration {
 
         boolean committed = BodyAttitudeTransactionCoordinator.commitLogicalOnly(player, component, candidate);
         traceBootstrap(player, candidate, committed ? "COMMITTED" : "STALE");
-        return preparation.outcome();
+        return committed ? preparation.outcome() : BodyAttitudeService.UpdateOutcome.REJECTED_COMMIT;
     }
 
     /** Retain the reactivation boundary that otherwise leaves an unchanged
      * inactive component and therefore sends no body-state update. */
     private static void traceBootstrap(Player player, BodyAttitudeLogicalCandidate candidate, String outcome) {
-        if (!candidate.bootstrapped() || !cc.sighs.gravityengine.gravity.debug.GravityDebugLog.SPATIAL_STATE_ENABLED) return;
+        if (!candidate.bootstrapped() || !cc.sighs.gravityengine.gravity.debug.GravityDebugLog.shouldLogSpatialState(player)) return;
         cc.sighs.gravityengine.gravity.debug.GravityDebugLog.spatialState(player, "BODY", "local-bootstrap",
                 "outcome=%s positionAnchor=%s trajectoryStart=%s requestedOrientation=%s committedOwnership=%s",
                 outcome, cc.sighs.gravityengine.gravity.debug.GravityDebugLog.exactVec(player.position()),
@@ -131,7 +135,7 @@ public final class BodyAttitudeTickIntegration {
             }
             boolean preserveWorldLook =
                     MinecraftBodyAttitudeSnapshotAdapter.hasContinuousActiveLook(component)
-                            && BodyAttitudeSuspensionLookPolicy.forReason(
+                            && MinecraftBodyAttitudeSuspensionPolicy.lookPolicy(
                             suspension.get().suspensionReason())
                             == BodyAttitudeSuspensionLookPolicy
                             .PRESERVE_WORLD_LOOK;
@@ -173,13 +177,14 @@ public final class BodyAttitudeTickIntegration {
         BodyAttitudeDecision decision = BodyAttitudeControlPolicyResolver.resolveActive( characterPlan.attitude());
         BodyAttitudeOwnership ownership =
                 BodyAttitudeActivationPolicy.resolve(decision, characterPlan.attitude());
-        Vec3 capturedLookForward = MinecraftBodyAttitudeSnapshotAdapter.worldLookForward(player, frame, pendingLook);
+        Vec3d capturedLookForward = MinecraftBodyAttitudeSnapshotAdapter.worldLookForward(player, frame, pendingLook);
         BodyAttitudeTickInput tickInput = new BodyAttitudeTickInput(
                 logicalStep,
                 decision,
                 ownership,
                 frame,
-                player.getDeltaMovement(),
+                MinecraftMathAdapter.toVec3d(
+                        player.getDeltaMovement()),
                 MinecraftBodyAttitudeSnapshotAdapter.lookScalars(player),
                 capturedLookForward,
                 MinecraftBodyAttitudeSnapshotAdapter.bootstrap(player, decision, frame),
@@ -212,15 +217,16 @@ public final class BodyAttitudeTickIntegration {
                 release.sourcePitch());
     }
 
-    private static BodyAttitudeRuntime.Service.UpdateOutcome processSuspension(
+    private static BodyAttitudeService.UpdateOutcome processSuspension(
             Player player,
             BodyAttitudeComponent component,
             TickCapture.Suspended suspended,
             long logicalStep) {
         var precondition = new BodyAttitudeTransactionPrecondition(component.snapshot());
-        BodyAttitudeTransactionCoordinator.commitLogicalOnly(player, component,
-                suspensionLogicalCandidate( component, suspended, logicalStep, precondition));
-        return BodyAttitudeRuntime.Service.UpdateOutcome.SUSPENDED;
+        boolean committed = BodyAttitudeTransactionCoordinator.commitLogicalOnly(player, component,
+                suspensionLogicalCandidate(component, suspended, logicalStep, precondition));
+        return committed ? BodyAttitudeService.UpdateOutcome.SUSPENDED
+                : BodyAttitudeService.UpdateOutcome.REJECTED_COMMIT;
     }
 
     private static BodyAttitudeLogicalCandidate suspensionLogicalCandidate(
@@ -230,7 +236,8 @@ public final class BodyAttitudeTickIntegration {
             BodyAttitudeTransactionPrecondition precondition
     ) {
         BodyAttitudeComponent.Snapshot before = component.snapshot();
-        BodyAttitudeState state = before.state();
+        /* Suspension is a mode exit: consume GE-owned momentum exactly once. */
+        BodyAttitudeState state = before.state().asKinematic();
         return new BodyAttitudeLogicalCandidate(
                 state,
                 before.view(),

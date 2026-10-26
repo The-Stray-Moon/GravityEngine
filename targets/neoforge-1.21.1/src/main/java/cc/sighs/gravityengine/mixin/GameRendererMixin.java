@@ -2,7 +2,6 @@ package cc.sighs.gravityengine.mixin;
 
 import cc.sighs.gravityengine.client.GravityPresentationIntegration;
 import cc.sighs.gravityengine.gravity.integration.vanilla.VanillaTargetingBridge;
-
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.client.renderer.GameRenderer;

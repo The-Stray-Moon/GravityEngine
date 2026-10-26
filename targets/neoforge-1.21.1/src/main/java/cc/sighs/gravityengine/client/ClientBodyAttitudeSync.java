@@ -1,6 +1,10 @@
 package cc.sighs.gravityengine.client;
 
-import cc.sighs.gravityengine.attitude.*;
+import cc.sighs.gravityengine.api.math.Vec3d;
+import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import cc.sighs.gravityengine.attitude.BodyAttitudeState;
+import cc.sighs.gravityengine.attitude.BodyRelativeViewState;
+import cc.sighs.gravityengine.attitude.SemanticView;
 import cc.sighs.gravityengine.attitude.runtime.*;
 import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
 import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
@@ -9,7 +13,10 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
-import java.util.*;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.UUID;
 
 /** Current body attitude receive/install boundary. Ordinary position corrections stay Vanilla-owned. */
 public final class ClientBodyAttitudeSync {
@@ -26,15 +33,15 @@ public final class ClientBodyAttitudeSync {
 
     static void receive(ClientboundBodyAttitudeStatePayload payload, net.minecraft.world.level.Level level) {
         if (payload == null || !payload.hasUsableRepresentation()) return;
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(null, "client-attitude-receive",
+        if (PlayerViewDebugLog.shouldLog(payload.entityUuid(), level)) PlayerViewDebugLog.packet(payload.entityUuid(), level, "client-attitude-receive",
                 "payload=%s connectionEpoch=%s syncTick=%s", payload, connectionEpoch, syncTick);
         if (level == null || !payload.dimensionId().equals(level.dimension().location())) {
-            offerPending(payload); return;
+            offerPending(payload, level); return;
         }
         Entity entity = level.getEntity(payload.entityId());
-        if (!(entity instanceof Player player)) { offerPending(payload); return; }
+        if (!(entity instanceof Player player)) { offerPending(payload, level); return; }
         if (!player.getUUID().equals(payload.entityUuid())) return;
-        if (!configReady(payload)) { offerPending(payload); return; }
+        if (!configReady(payload)) { offerPending(payload, level); return; }
         applyAttitude(player, payload);
     }
 
@@ -55,7 +62,44 @@ public final class ClientBodyAttitudeSync {
                 return component.observeReplication(a.streamEpoch(), a.authoritativeRevision(),
                         a.authoritativeServerGameTick(), a.authoritativeConfigGeneration());
             }
-            var state = new BodyAttitudeState(a.worldFromBody(), a.worldFromBody(), net.minecraft.world.phys.Vec3.ZERO, before.state().tick(), a.authoritativeRevision(), a.initialized());
+            /*
+             * The server packet supplies q + optional L_world.
+             *
+             * Effective inertia belongs to the already-validated
+             * config generation, so the receiving client binds it
+             * here instead of accepting a second payload copy as
+             * state authority.
+             */
+            var receivingConfig =
+                    BodyAttitudeRuntime.Config
+                            .clientFor(
+                                    a.authoritativeConfigGeneration()
+                            )
+                            .orElseThrow();
+
+            BodyAttitudeState state =
+                    a.dynamicStatePresent()
+
+                            ? cc.sighs.gravityengine.attitude
+                            .AttitudeDynamicHandoff
+                            .installDynamic(
+                                    a.worldFromBody(),
+                                    a.angularMomentumWorld(),
+                                    receivingConfig.simulation()
+                                            .elytraEffectiveAngularInertia(),
+                                    before.state().tick(),
+                                    a.authoritativeRevision(),
+                                    a.initialized()
+                            )
+
+                            : cc.sighs.gravityengine.attitude
+                            .AttitudeDynamicHandoff
+                            .installKinematic(
+                                    a.worldFromBody(),
+                                    before.state().tick(),
+                                    a.authoritativeRevision(),
+                                    a.initialized()
+                            );
             var view = player.isLocalPlayer() && before.view().initialized()
                     ? before.view().bind(before.state().currentWorldFromBody()).relativeToBody(a.worldFromBody())
                     : a.initialized() ? BodyRelativeViewState.fromSemantic(new SemanticView(a.worldFromController()), a.worldFromBody(),
@@ -94,12 +138,16 @@ public final class ClientBodyAttitudeSync {
                 if (a.ownership() == BodyAttitudeOwnership.INACTIVE
                         && before.ownership() == BodyAttitudeOwnership.ACTIVE && before.view().initialized()
                         && (a.suspensionReason() == BodyAttitudeSuspensionReason.INACTIVE
-                            || BodyAttitudeSuspensionLookPolicy.forReason(a.suspensionReason())
+                            || MinecraftBodyAttitudeSuspensionPolicy.lookPolicy(
+                        a.suspensionReason())
                                 == BodyAttitudeSuspensionLookPolicy.PRESERVE_WORLD_LOOK)) {
                     var rebase = AttitudeSpaceTransform.releaseLookRebase(
                             cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy.usesCustomPresentation(player)
                                     ? GravityFrameAccess.authoritativeFrame(player) : cc.sighs.gravityengine.gravity.GravityFrame.DEFAULT,
-                            a.worldFromBody(), view, yaw, pitch);
+                            // The retiring local controller owns the current look.
+                            // The server's independently timed scalar/quaternion
+                            // sample cannot rewind it merely by releasing ownership.
+                            before.state().currentWorldFromBody(), before.view(), yaw, pitch);
                     player.setYRot(rebase.sourceYaw());
                     player.setXRot(rebase.sourcePitch());
 
@@ -125,8 +173,8 @@ public final class ClientBodyAttitudeSync {
         }
     }
 
-    private static void offerPending(ClientboundBodyAttitudeStatePayload payload) {
-        if (PlayerViewDebugLog.ENABLED) PlayerViewDebugLog.event(null, "client-attitude-pending",
+    private static void offerPending(ClientboundBodyAttitudeStatePayload payload, net.minecraft.world.level.Level level) {
+        if (PlayerViewDebugLog.shouldLog(payload.entityUuid(), level)) PlayerViewDebugLog.packet(payload.entityUuid(), level, "client-attitude-pending",
                 "payload=%s connectionEpoch=%s syncTick=%s", payload, connectionEpoch, syncTick);
         PendingKey key = new PendingKey(payload.dimensionId(), payload.entityId(), payload.entityUuid(), connectionEpoch);
         Pending previous = PENDING.get(key);

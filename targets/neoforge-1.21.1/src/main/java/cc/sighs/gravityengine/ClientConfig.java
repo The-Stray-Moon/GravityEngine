@@ -1,5 +1,7 @@
 package cc.sighs.gravityengine;
 
+import cc.sighs.gravityengine.attitude.presentation.BodyAttitudeVisualConfigSnapshot;
+
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -35,9 +37,8 @@ public final class ClientConfig {
 
     public static volatile boolean gravityHitboxes;
     public static volatile boolean bodyAttitudeDebug;
-    public static volatile cc.sighs.gravityengine.client.BodyAttitudeVisualConfigSnapshot
-            bodyAttitudeVisual = cc.sighs.gravityengine.client
-            .BodyAttitudeVisualConfigSnapshot.DEFAULT;
+    public static volatile cc.sighs.gravityengine.attitude.presentation.BodyAttitudeVisualConfigSnapshot
+            bodyAttitudeVisual = BodyAttitudeVisualConfigSnapshot.DEFAULT;
 
     private ClientConfig() {}
 
@@ -46,7 +47,7 @@ public final class ClientConfig {
         bodyAttitudeDebug = ATTITUDE_DEBUG.get();
         double remoteMin = REMOTE_MIN_DURATION.get();
         double remoteMax = Math.max(remoteMin, REMOTE_MAX_DURATION.get());
-        bodyAttitudeVisual = new cc.sighs.gravityengine.client.BodyAttitudeVisualConfigSnapshot(remoteMin, remoteMax);
+        bodyAttitudeVisual = new BodyAttitudeVisualConfigSnapshot(remoteMin, remoteMax);
     }
 
     @SubscribeEvent

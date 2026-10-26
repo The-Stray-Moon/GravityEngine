@@ -1,12 +1,52 @@
 package cc.sighs.gravityengine.attitude.runtime;
 
 import cc.sighs.gravityengine.gravity.debug.PlayerViewDebugLog;
+import cc.sighs.gravityengine.attitude.AttitudeSpaceTransform;
+import cc.sighs.gravityengine.attitude.BodyRelativeViewState;
+import cc.sighs.gravityengine.attitude.SemanticView;
+import cc.sighs.gravityengine.gravity.GravityFrame;
+import cc.sighs.gravityengine.gravity.look.GravityLocalLook;
+import cc.sighs.gravityengine.gravity.minecraft.GravityFrameAccess;
+import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import net.minecraft.world.entity.player.Player;
+
 import java.util.Objects;
 
 /** Publishes actor state and semantic look. Character geometry, support and translation have separate owners. */
 public final class BodyAttitudeTransactionCoordinator {
     private BodyAttitudeTransactionCoordinator() {}
+
+    /** Explicit server look command handoff. Position-only reconciliation never
+     * calls this seam. Body attitude, momentum and logical-step ownership survive. */
+    public static void acceptExplicitLook(Player player) {
+        var component = BodyAttitudeRuntime.Access.component(player);
+        synchronized (component) {
+            var before = component.snapshot();
+            if (before.ownership() != BodyAttitudeOwnership.ACTIVE || !before.view().initialized()) return;
+            var frame = GravityInfluencePolicy.usesGravityLocalLook(player)
+                    ? GravityFrameAccess.authoritativeFrame(player) : GravityFrame.DEFAULT;
+            var controller = GravityLocalLook.lookQuaternion(
+                    frame, player.getYRot(), player.getXRot(), 0);
+            component.commitViewOnly(BodyRelativeViewState.fromSemantic(
+                    new SemanticView(controller),
+                    before.state().currentWorldFromBody(), before.view().localLook()), before.lastLocalSimulationStep());
+        }
+    }
+
+    /** Project the retiring semantic authority once, before a scalar look owner
+     * is allowed to interpret relative rotation. Never infer look from stale carriers. */
+    public static void projectActiveLook(Player player) {
+        var component = BodyAttitudeRuntime.Access.component(player);
+        synchronized (component) {
+            var before = component.snapshot();
+            if (before.ownership() != BodyAttitudeOwnership.ACTIVE || !before.view().initialized()) return;
+            var frame = GravityInfluencePolicy.usesGravityLocalLook(player)
+                    ? GravityFrameAccess.authoritativeFrame(player) : GravityFrame.DEFAULT;
+            var look = AttitudeSpaceTransform.releaseLookRebase(
+                    frame, before.state().currentWorldFromBody(), before.view(), player.getYRot(), player.getXRot());
+            applyLookRebase(player, new BodyAttitudeLookRebase(look.sourceYaw(), look.sourcePitch()));
+        }
+    }
     public static boolean commitLogicalOnly(
             Player player,
             BodyAttitudeComponent component,
@@ -36,7 +76,7 @@ public final class BodyAttitudeTransactionCoordinator {
                 applyLookRebase(player, logical.lookRebase());
                 component.commitLogicalCandidate(logical);
 
-                if (PlayerViewDebugLog.ENABLED) {
+                if (PlayerViewDebugLog.shouldLog(player)) {
                     PlayerViewDebugLog.mutation(
                             player,
                             "attitude-logical-commit/" + logical.kind(),
@@ -45,32 +85,23 @@ public final class BodyAttitudeTransactionCoordinator {
                 }
 
                 return true;
-            } catch (RuntimeException failure) {
-                if (PlayerViewDebugLog.ENABLED) {
-                    PlayerViewDebugLog.event(
-                            player,
-                            "attitude-logical-rollback-before",
-                            "failure=%s",
-                            failure.toString()
-                    );
+            } catch (RuntimeException | Error failure) {
+                try {
+                    component.restoreSnapshot(oldComponent);
+                    try {
+                        player.setYRot(oldYaw);
+                    } finally {
+                        try {
+                            player.setXRot(oldPitch);
+                        } finally {
+                            player.yRotO = oldYawPrevious;
+                            player.xRotO = oldPitchPrevious;
+                        }
+                    }
+                } catch (RuntimeException | Error rollbackFailure) {
+                    failure.addSuppressed(rollbackFailure);
                 }
-
-                component.restoreSnapshot(oldComponent);
-
-                player.setYRot(oldYaw);
-                player.setXRot(oldPitch);
-                player.yRotO = oldYawPrevious;
-                player.xRotO = oldPitchPrevious;
-
-                if (PlayerViewDebugLog.ENABLED) {
-                    PlayerViewDebugLog.event(
-                            player,
-                            "attitude-logical-rollback-after",
-                            ""
-                    );
-                }
-
-                return false;
+                throw failure;
             }
         }
     }
@@ -90,7 +121,7 @@ public final class BodyAttitudeTransactionCoordinator {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(component, "component");
         synchronized (component) {
-            var before = PlayerViewDebugLog.ENABLED ? component.snapshot() : null;
+            var before = PlayerViewDebugLog.shouldLog(player) ? component.snapshot() : null;
             cc.sighs.gravityengine.player.CharacterControlRuntime.clearMode(player);
             component.invalidateContinuity();
             PlayerViewDebugLog.mutation(player, "attitude-invalidate", before);
@@ -110,7 +141,7 @@ public final class BodyAttitudeTransactionCoordinator {
         Objects.requireNonNull(player, "player");
         Objects.requireNonNull(component, "component");
         synchronized (component) {
-            var before = PlayerViewDebugLog.ENABLED ? component.snapshot() : null;
+            var before = PlayerViewDebugLog.shouldLog(player) ? component.snapshot() : null;
             cc.sighs.gravityengine.player.CharacterControlRuntime.clearMode(player);
             component.retireAuthoritativeStream(retiredStreamEpoch);
             PlayerViewDebugLog.mutation(player, "attitude-retire-stream", before);
@@ -133,7 +164,7 @@ public final class BodyAttitudeTransactionCoordinator {
             // Chronology only. Lifecycle/reset owners clear mode and actor together.
             // ensureServerStream must not turn a valid active swim into mode=false.
             component.beginAuthoritativeStream(streamEpoch);
-            if (PlayerViewDebugLog.ENABLED) {
+            if (PlayerViewDebugLog.shouldLog(player)) {
                 PlayerViewDebugLog.event(player, "attitude-open-stream", "stream=%s", streamEpoch);
             }
         }
@@ -169,7 +200,7 @@ public final class BodyAttitudeTransactionCoordinator {
                 player,
                 "ownership-look-projection"
         )) {
-            if (PlayerViewDebugLog.ENABLED) {
+            if (PlayerViewDebugLog.shouldLog(player)) {
                 PlayerViewDebugLog.event(
                         player,
                         "ownership-look-target",

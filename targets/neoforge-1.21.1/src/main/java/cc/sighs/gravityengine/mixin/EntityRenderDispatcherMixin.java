@@ -84,7 +84,7 @@ public abstract class EntityRenderDispatcherMixin {
             CallbackInfo ci
     ) {
         if (!entity.level().isClientSide
-                || !GravityInfluencePolicy.usesCustomPresentation(entity)) {
+                || !cc.sighs.gravityengine.client.ClientGravityFrameSampler.usesPresentation(entity)) {
             return;
         }
         gravityengine$renderCustomHitbox(
