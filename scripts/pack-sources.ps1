@@ -64,6 +64,15 @@ if (-not (Test-Path -LiteralPath $CommonRoot -PathType Container)) {
 }
 $packRoots.Add([pscustomobject]@{ Path = (Get-Item -LiteralPath $CommonRoot).FullName; Prefix = 'common' })
 
+$sharedTargetConventionsRoot = Join-Path $RepositoryRoot 'gradle\target-conventions'
+if (-not (Test-Path -LiteralPath $sharedTargetConventionsRoot -PathType Container)) {
+    throw "Shared target conventions directory not found: $sharedTargetConventionsRoot"
+}
+$packRoots.Add([pscustomobject]@{
+        Path   = (Get-Item -LiteralPath $sharedTargetConventionsRoot).FullName
+        Prefix = 'gradle/target-conventions'
+    })
+
 if (-not (Test-Path -LiteralPath $TargetsRoot -PathType Container)) {
     throw "Targets directory not found: $TargetsRoot"
 }

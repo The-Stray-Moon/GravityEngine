@@ -1,10 +1,11 @@
 [CmdletBinding()]
 param(
-    [string] $TargetsRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'targets')
+    [string] $TargetsRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if (-not $TargetsRoot) { $TargetsRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'targets' }
 
 function Read-CiProperties {
     param([Parameter(Mandatory = $true)][string] $Path)
@@ -56,7 +57,7 @@ foreach ($directory in Get-ChildItem -LiteralPath $TargetsRoot -Directory | Sort
         throw "Target '$($directory.Name)' has invalid ci.enabled '$enabled'; use true or false"
     }
     if ($enabled -eq 'false') {
-        Write-Host "Skipping disabled target: $($directory.Name)"
+        Write-Host "NOT VERIFIED (disabled): $($directory.Name)"
         continue
     }
 
@@ -76,6 +77,7 @@ foreach ($directory in Get-ChildItem -LiteralPath $TargetsRoot -Directory | Sort
         target = $directory.Name
         java = $properties['ci.java']
         attempts = $attempts
+        status = if ($properties.ContainsKey('support.status')) { $properties['support.status'] } else { 'UNVERIFIED' }
     }
 }
 
