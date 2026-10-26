@@ -8,100 +8,782 @@ repositories {
 }
 
 dependencies {
-    implementation fileTree(dir: file('libs'), include: ['*.jar'], exclude: ['*-sources.jar', '*-javadoc.jar'])
+    implementation fileTree(
+            dir: file('libs'),
+            include: ['*.jar'],
+            exclude: ['*-sources.jar', '*-javadoc.jar']
+    )
 }
 
-sourceSets.main.resources.srcDir project(':common').file('src/main/resources')
+sourceSets.main.resources.srcDir(
+        project(':common').file('src/main/resources')
+)
 
-def publishLoader = project.projectDir.name.tokenize('-').first()
-// Target identity comes from the directory name, the Minecraft version comes from
-// the target-local gradle.properties loaded by target-conventions/properties.gradle.
-def publishMinecraftVersion = providers.provider { findProperty('minecraft_version')?.toString() }
+/*
+ * ---------------------------------------------------------------------------
+ * Target identity
+ * ---------------------------------------------------------------------------
+ */
 
-def publishFile = tasks.findByName('remapJar') != null ?
-        tasks.named('remapJar').flatMap { it.archiveFile } :
-        tasks.named('jar', Jar).flatMap { it.archiveFile }
-def curseforgeProjectId = providers.provider { findProperty('publish_curseforge_project_id')?.toString() }
-        .orElse(providers.environmentVariable('CURSEFORGE_PROJECT_ID'))
-def modrinthProjectId = providers.provider { findProperty('publish_modrinth_project_id')?.toString() }
-        .orElse(providers.environmentVariable('MODRINTH_PROJECT_ID'))
+def publicationTarget =
+        project.projectDir.name
+
+def publicationLoader =
+        publicationTarget.tokenize('-').first()
+
+def publicationMinecraftVersion =
+        providers.provider {
+            findProperty('minecraft_version')?.toString()?.trim()
+        }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Explicit Maven publishing channel
+ * ---------------------------------------------------------------------------
+ *
+ * publishType is the repository lifecycle decision:
+ *
+ *   -PpublishType=snapshot  -> maven-snapshots
+ *   -PpublishType=release   -> maven-releases
+ *
+ * It is intentionally not derived from mod_version or task names.
+ */
+
+def snapshotRepositoryUrl =
+        'https://maven.sighs.cc/repository/maven-snapshots/'
+
+def releaseRepositoryUrl =
+        'https://maven.sighs.cc/repository/maven-releases/'
+
+def rawPublishType =
+        providers.gradleProperty('publishType').orNull
+
+def publishType =
+        rawPublishType == null
+                ? null
+                : rawPublishType.trim()
+
+if (publishType != null &&
+        !(publishType in ['snapshot', 'release'])) {
+
+    throw new GradleException(
+            "Unknown publishType '${rawPublishType}'. " +
+                    "Expected 'snapshot' or 'release'."
+    )
+}
+
+/*
+ * mod_version is the GravityEngine software version only.
+ *
+ * The Maven lifecycle marker belongs to publishType:
+ *
+ *   mod_version = 1.0.0
+ *   snapshot     -> 1.0.0-SNAPSHOT
+ *   release      -> 1.0.0
+ */
+
+def configuredBaseVersion =
+        findProperty('mod_version')?.toString()?.trim()
+
+def baseVersion =
+        configuredBaseVersion == null ||
+                configuredBaseVersion.isEmpty()
+                ? project.version.toString()
+                : configuredBaseVersion
+
+if (publishType != null &&
+        baseVersion.toLowerCase(Locale.ROOT)
+                .endsWith('-snapshot')) {
+
+    throw new GradleException(
+            "mod_version must not encode Maven lifecycle state: " +
+                    "'${baseVersion}'. Use a base version such as " +
+                    "'1.0.0' and select the snapshot channel with " +
+                    "-PpublishType=snapshot."
+    )
+}
+
+def effectiveMavenVersion =
+        publishType == 'snapshot'
+                ? "${baseVersion}-SNAPSHOT"
+                : baseVersion
+
+def mavenRepositoryUrl =
+        publishType == 'snapshot'
+                ? snapshotRepositoryUrl
+                : publishType == 'release'
+                        ? releaseRepositoryUrl
+                        : null
+
+/*
+ * ---------------------------------------------------------------------------
+ * Git identity / build provenance
+ * ---------------------------------------------------------------------------
+ *
+ * Priority:
+ *
+ *   1. -PbuildCommit=<sha>
+ *   2. GITHUB_SHA
+ *   3. local git rev-parse HEAD
+ *
+ * The commit is provenance only. It is never appended to the Maven version.
+ */
+
+def repositoryRoot =
+        rootProject.projectDir
+                .toPath()
+                .resolve('../..')
+                .normalize()
+                .toFile()
+
+def repositoryGitMarker =
+        new File(repositoryRoot, '.git')
+
+def localGitAvailable =
+        repositoryGitMarker.exists()
+
+def readGit = { List<String> arguments ->
+    if (!localGitAvailable) {
+        return null
+    }
+
+    try {
+        def gitOutput =
+                providers.exec {
+                    workingDir repositoryRoot
+                    commandLine(['git'] + arguments)
+                    ignoreExitValue = true
+                }
+
+        if (gitOutput.result.get().exitValue != 0) {
+            return null
+        }
+
+        def value =
+                gitOutput.standardOutput
+                        .asText
+                        .get()
+                        .trim()
+
+        return value.isEmpty()
+                ? null
+                : value
+    } catch (Exception ignored) {
+        return null
+    }
+}
+
+def localGitHead =
+        readGit(['rev-parse', 'HEAD'])
+
+def localGitStatus =
+        readGit(['status', '--porcelain'])
+
+def localGitDirty =
+        localGitStatus != null &&
+                !localGitStatus.isEmpty()
+
+def propertyGitCommit =
+        providers.gradleProperty('buildCommit')
+                .orNull
+                ?.trim()
+
+def githubGitCommit =
+        providers.environmentVariable('GITHUB_SHA')
+                .orNull
+                ?.trim()
+
+def gitCommit =
+        null
+
+def gitCommitSource =
+        null
+
+if (propertyGitCommit) {
+    gitCommit =
+            propertyGitCommit
+
+    gitCommitSource =
+            '-PbuildCommit'
+} else if (githubGitCommit) {
+    gitCommit =
+            githubGitCommit
+
+    gitCommitSource =
+            'GITHUB_SHA'
+} else if (localGitHead != null) {
+    gitCommit =
+            localGitHead
+
+    gitCommitSource =
+            'local git rev-parse HEAD'
+}
+
+if (gitCommit != null) {
+    gitCommit =
+            gitCommit.toLowerCase(Locale.ROOT)
+
+    if (!(gitCommit ==~ /[0-9a-f]{7,40}/)) {
+        throw new GradleException(
+                "Invalid Git commit '${gitCommit}' from " +
+                        "${gitCommitSource}. Expected 7-40 " +
+                        "hexadecimal characters."
+        )
+    }
+}
+
+if (localGitHead != null) {
+    localGitHead =
+            localGitHead
+                    .trim()
+                    .toLowerCase(Locale.ROOT)
+}
+
+def fullGitCommit =
+        gitCommit != null &&
+                gitCommit.length() == 40
+                ? gitCommit
+                : null
+
+def gitCommitShort =
+        gitCommit != null
+                ? gitCommit.take(8)
+                : null
+/*
+ * ---------------------------------------------------------------------------
+ * Final distributable artifact
+ * ---------------------------------------------------------------------------
+ *
+ * Fabric publishes remapJar.
+ * Legacy Forge publishes reobfJar.
+ * Modern NeoForge publishes the ordinary final jar.
+ */
+
+def publishArtifactTaskName =
+        tasks.findByName('remapJar') != null
+                ? 'remapJar'
+                : tasks.findByName('reobfJar') != null
+                        ? 'reobfJar'
+                        : 'jar'
+
+def publishArtifactTask =
+        tasks.named(
+                publishArtifactTaskName,
+                org.gradle.jvm.tasks.Jar
+        )
+
+def publishFile =
+        publishArtifactTask.flatMap {
+            it.archiveFile
+        }
+
+/*
+ * ---------------------------------------------------------------------------
+ * JAR provenance
+ * ---------------------------------------------------------------------------
+ *
+ * This is ordinary build metadata.  It remains useful when a JAR is
+ * distributed outside Maven, for example through CurseForge or Modrinth.
+ */
+
+tasks.withType(org.gradle.jvm.tasks.Jar).configureEach {
+    manifest {
+        attributes(
+                'Implementation-Title':
+                        findProperty('mod_name')?.toString()
+                                ?: project.name,
+
+                'Implementation-Version':
+                        baseVersion,
+
+                'Build-Revision':
+                        gitCommit ?: 'unknown',
+
+                'Build-Revision-Short':
+                        gitCommitShort ?: 'unknown',
+
+                'Build-Target':
+                        publicationTarget,
+
+                'Minecraft-Version':
+                        publicationMinecraftVersion
+                                .getOrElse('unknown')
+        )
+    }
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * CurseForge / Modrinth
+ * ---------------------------------------------------------------------------
+ *
+ * This publishing surface is independent from Maven snapshot/release
+ * routing.  A Maven snapshot does not make this an alpha release.
+ */
+
+def curseforgeProjectId =
+        providers.provider {
+            findProperty(
+                    'publish_curseforge_project_id'
+            )?.toString()
+        }.orElse(
+                providers.environmentVariable(
+                        'CURSEFORGE_PROJECT_ID'
+                )
+        )
+
+def modrinthProjectId =
+        providers.provider {
+            findProperty(
+                    'publish_modrinth_project_id'
+            )?.toString()
+        }.orElse(
+                providers.environmentVariable(
+                        'MODRINTH_PROJECT_ID'
+                )
+        )
 
 publishMods {
-    file = publishFile
-    changelog = providers.environmentVariable('PUBLISH_CHANGELOG').getOrElse('See the project changelog for details.')
-    type = STABLE
-    modLoaders.add(publishLoader)
+    file =
+            publishFile
+
+    changelog =
+            providers.environmentVariable(
+                    'PUBLISH_CHANGELOG'
+            ).getOrElse(
+                    'See the project changelog for details.'
+            )
+
+    type =
+            STABLE
+
+    modLoaders.add(
+            publicationLoader
+    )
 
     curseforge {
-        projectId = curseforgeProjectId
-        accessToken = providers.environmentVariable('CURSEFORGE_TOKEN')
-        minecraftVersions.add(publishMinecraftVersion)
-        client = true
-        server = true
+        projectId =
+                curseforgeProjectId
+
+        accessToken =
+                providers.environmentVariable(
+                        'CURSEFORGE_TOKEN'
+                )
+
+        minecraftVersions.add(
+                publicationMinecraftVersion
+        )
+
+        client =
+                true
+
+        server =
+                true
     }
 
     modrinth {
-        projectId = modrinthProjectId
-        accessToken = providers.environmentVariable('MODRINTH_TOKEN')
-        minecraftVersions.add(publishMinecraftVersion)
+        projectId =
+                modrinthProjectId
+
+        accessToken =
+                providers.environmentVariable(
+                        'MODRINTH_TOKEN'
+                )
+
+        minecraftVersions.add(
+                publicationMinecraftVersion
+        )
     }
 }
 
 tasks.named('publishMods').configure {
     doFirst {
         def missing = [
-                'minecraft_version (target gradle.properties)'            : publishMinecraftVersion,
-                'publish_curseforge_project_id (or CURSEFORGE_PROJECT_ID)': curseforgeProjectId,
-                'publish_modrinth_project_id (or MODRINTH_PROJECT_ID)'    : modrinthProjectId,
-                'CURSEFORGE_TOKEN'                                        : providers.environmentVariable('CURSEFORGE_TOKEN'),
-                'MODRINTH_TOKEN'                                          : providers.environmentVariable('MODRINTH_TOKEN')
-        ].findAll { _, value -> !value.present || value.get().trim().isEmpty() }.keySet()
+                'minecraft_version (target gradle.properties)':
+                        publicationMinecraftVersion,
+
+                'publish_curseforge_project_id (or CURSEFORGE_PROJECT_ID)':
+                        curseforgeProjectId,
+
+                'publish_modrinth_project_id (or MODRINTH_PROJECT_ID)':
+                        modrinthProjectId,
+
+                'CURSEFORGE_TOKEN':
+                        providers.environmentVariable(
+                                'CURSEFORGE_TOKEN'
+                        ),
+
+                'MODRINTH_TOKEN':
+                        providers.environmentVariable(
+                                'MODRINTH_TOKEN'
+                        )
+        ].findAll { _, value ->
+            !value.present ||
+                    value.get().trim().isEmpty()
+        }.keySet()
 
         if (!missing.isEmpty()) {
-            throw new GradleException("Cannot publish mods; missing: ${missing.join(', ')}")
+            throw new GradleException(
+                    "Cannot publish mods; missing: " +
+                            missing.join(', ')
+            )
         }
     }
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * Maven publishing
+ * ---------------------------------------------------------------------------
+ */
+
+def mavenPublishUser =
+        providers.environmentVariable(
+                'SIGHS_PUBLISH_USER'
+        )
+
+def mavenPublishPassword =
+        providers.environmentVariable(
+                'SIGHS_PUBLISH_PASSWORD'
+        )
+
+def mavenPublicationName =
+        'mavenJava'
+
+def mavenRepositoryName =
+        'remoteRepo'
+
 publishing {
     publications {
         mavenJava(MavenPublication) {
-            from components.java
+            artifact(
+                    publishArtifactTask.get()
+            )
 
-            groupId = project.group.toString()
-            artifactId = base.archivesName.get()
-            version = project.version.toString()
+            groupId =
+                    project.group.toString()
 
-            // Loader and Minecraft dependencies are supplied by the game runtime,
-            // so the published mod POM must not expose the target build classpath.
-            pom.withXml {
-                def dependenciesNode = asNode().getAt('dependencies')[0]
-                if (dependenciesNode != null) {
-                    dependenciesNode.children().toList().each { dependency ->
-                        dependenciesNode.remove(dependency)
+            artifactId =
+                    base.archivesName.get()
+
+            version =
+                    effectiveMavenVersion
+
+            pom {
+                name =
+                        findProperty('mod_name')?.toString()
+                                ?: project.name
+
+                description =
+                        findProperty(
+                                'mod_description'
+                        )?.toString()
+
+                url =
+                        'https://github.com/Mafuyu404/GravityEngine'
+
+                licenses {
+                    license {
+                        name =
+                                'GNU General Public License v3.0'
+
+                        url =
+                                'https://www.gnu.org/licenses/gpl-3.0.html'
                     }
+                }
+
+                scm {
+                    connection =
+                            'scm:git:https://github.com/Mafuyu404/GravityEngine.git'
+
+                    developerConnection =
+                            'scm:git:ssh://git@github.com/Mafuyu404/GravityEngine.git'
+
+                    url =
+                            'https://github.com/Mafuyu404/GravityEngine'
+
+                    if (gitCommit != null) {
+                        tag =
+                                gitCommit
+                    }
+                }
+
+                withXml {
+                    def root =
+                            asNode()
+
+                    def propertiesNodes =
+                            root.getAt('properties')
+
+                    def propertiesNode =
+                            propertiesNodes.isEmpty()
+                                    ? root.appendNode('properties')
+                                    : propertiesNodes[0]
+
+                    propertiesNode.appendNode(
+                            'gravityengine.version.base',
+                            baseVersion
+                    )
+
+                    propertiesNode.appendNode(
+                            'gravityengine.maven.channel',
+                            publishType ?: 'local'
+                    )
+
+                    propertiesNode.appendNode(
+                            'gravityengine.git.commit',
+                            gitCommit ?: 'unknown'
+                    )
+
+                    propertiesNode.appendNode(
+                            'gravityengine.git.commit.short',
+                            gitCommitShort ?: 'unknown'
+                    )
+
+                    propertiesNode.appendNode(
+                            'gravityengine.target',
+                            publicationTarget
+                    )
+
+                    propertiesNode.appendNode(
+                            'gravityengine.loader',
+                            publicationLoader
+                    )
+
+                    propertiesNode.appendNode(
+                            'gravityengine.minecraft.version',
+                            publicationMinecraftVersion.getOrElse(
+                                    'unknown'
+                            )
+                    )
                 }
             }
         }
     }
 
-    repositories {
-        def isSnapshot = project.version.toString().toLowerCase().contains('snapshot')
-        def publishUrl = isSnapshot ?
-                'https://maven.sighs.cc/repository/maven-snapshots/' :
-                'https://maven.sighs.cc/repository/maven-releases/'
+    if (mavenRepositoryUrl != null) {
+        repositories {
+            maven {
+                name = mavenRepositoryName
+                url = uri(mavenRepositoryUrl)
 
-        maven {
-            name = 'remoteRepo'
-            url = uri(publishUrl)
-            credentials {
-                username = System.getenv('SIGHS_PUBLISH_USER')
-                password = System.getenv('SIGHS_PUBLISH_PASSWORD')
+                credentials {
+                    username = mavenPublishUser.orNull
+                    password = mavenPublishPassword.orNull
+                }
+            }
+        }
+    }
+}
+/*
+ * ---------------------------------------------------------------------------
+ * Remote Maven publication validation
+ * ---------------------------------------------------------------------------
+ */
+
+if (mavenRepositoryUrl != null) {
+    tasks.withType(
+            org.gradle.api.publish.maven.tasks.PublishToMavenRepository
+    ).configureEach {
+
+        doFirst {
+            def problems = []
+
+            def publishUser =
+                    mavenPublishUser.orNull
+
+            def publishPassword =
+                    mavenPublishPassword.orNull
+
+            if (publishUser == null ||
+                    publishUser.trim().isEmpty()) {
+
+                problems.add(
+                        'missing SIGHS_PUBLISH_USER'
+                )
+            }
+
+            if (publishPassword == null ||
+                    publishPassword.trim().isEmpty()) {
+
+                problems.add(
+                        'missing SIGHS_PUBLISH_PASSWORD'
+                )
+            }
+
+            if (fullGitCommit == null) {
+                problems.add(
+                        'missing full Git commit identity ' +
+                                '(-PbuildCommit=<40-char-sha>, ' +
+                                'GITHUB_SHA, or local .git)'
+                )
+            }
+
+            if (localGitHead != null &&
+                    fullGitCommit != null &&
+                    !localGitHead.equalsIgnoreCase(fullGitCommit)) {
+
+                problems.add(
+                        "resolved Git commit does not match checkout HEAD " +
+                                "(resolved=${fullGitCommit}, " +
+                                "HEAD=${localGitHead})"
+                )
+            }
+
+            if (localGitDirty) {
+                problems.add(
+                        'Git working tree is dirty; commit or revert ' +
+                                'all changes before remote publication'
+                )
+            }
+
+            if (!problems.isEmpty()) {
+                throw new GradleException(
+                        "Cannot publish Maven artifact to " +
+                                "${mavenRepositoryUrl}: " +
+                                problems.join('; ')
+                )
             }
         }
     }
 }
 
-tasks.withType(GenerateModuleMetadata).configureEach {
-    enabled = false
+/*
+ * ---------------------------------------------------------------------------
+ * Explicit Maven entry points
+ * ---------------------------------------------------------------------------
+ *
+ * Gradle generates:
+ *
+ *   publishMavenJavaPublicationToRemoteRepoRepository
+ *
+ * The user-facing tasks below make the channel explicit and fail before
+ * remote publication when the requested channel does not match publishType.
+ */
+
+def remoteMavenPublishTaskName =
+        "publish${mavenPublicationName.capitalize()}" +
+                "PublicationTo${mavenRepositoryName.capitalize()}" +
+                "Repository"
+
+def verifySnapshotPublishRequest =
+        tasks.register(
+                'verifyPublishMavenSnapshotRequest'
+        ) {
+            group =
+                    'publishing'
+
+            doLast {
+                if (publishType == null) {
+                    throw new GradleException(
+                            "publishMavenSnapshot requires " +
+                                    "-PpublishType=snapshot."
+                    )
+                }
+
+                if (publishType != 'snapshot') {
+                    throw new GradleException(
+                            "publishMavenSnapshot cannot publish the " +
+                                    "'${publishType}' channel. " +
+                                    "Use -PpublishType=snapshot."
+                    )
+                }
+            }
+        }
+
+def verifyReleasePublishRequest =
+        tasks.register(
+                'verifyPublishMavenReleaseRequest'
+        ) {
+            group =
+                    'publishing'
+
+            doLast {
+                if (publishType == null) {
+                    throw new GradleException(
+                            "publishMavenRelease requires " +
+                                    "-PpublishType=release."
+                    )
+                }
+
+                if (publishType != 'release') {
+                    throw new GradleException(
+                            "publishMavenRelease cannot publish the " +
+                                    "'${publishType}' channel. " +
+                                    "Use -PpublishType=release."
+                    )
+                }
+            }
+        }
+
+tasks.register('publishMavenSnapshot') {
+    group =
+            'publishing'
+
+    description =
+            'Publishes the target artifact to the Maven snapshot repository.'
+
+    dependsOn(
+            verifySnapshotPublishRequest
+    )
+
+    if (publishType == 'snapshot') {
+        dependsOn(
+                remoteMavenPublishTaskName
+        )
+    }
+}
+
+tasks.register('publishMavenRelease') {
+    group =
+            'publishing'
+
+    description =
+            'Publishes the target artifact to the Maven release repository.'
+
+    dependsOn(
+            verifyReleasePublishRequest
+    )
+
+    if (publishType == 'release') {
+        dependsOn(
+                remoteMavenPublishTaskName
+        )
+    }
+}
+
+/*
+ * Ensure request validation always runs before any remote publication when
+ * the corresponding wrapper task is part of the graph.
+ *
+ * This matters especially for accidental combined invocations such as:
+ *
+ *   publishMavenSnapshot publishMavenRelease -PpublishType=snapshot
+ */
+if (mavenRepositoryUrl != null) {
+    tasks.withType(
+            org.gradle.api.publish.maven.tasks.PublishToMavenRepository
+    ).configureEach {
+
+        mustRunAfter(
+                verifySnapshotPublishRequest
+        )
+
+        mustRunAfter(
+                verifyReleasePublishRequest
+        )
+    }
+}
+
+/*
+ * Gradle Module Metadata is intentionally disabled.
+ *
+ * The Maven artifact is a Minecraft mod artifact rather than a normal Java
+ * library with loader/Minecraft dependencies intended for consumers.
+ */
+tasks.withType(
+        org.gradle.api.publish.tasks.GenerateModuleMetadata
+).configureEach {
+    enabled =
+            false
 }

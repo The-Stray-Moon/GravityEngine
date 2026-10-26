@@ -5,8 +5,8 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'net.fabricmc:fabric-loom:1.10.5'
-        classpath 'me.modmuss50:mod-publish-plugin:2.1.1'
+        classpath 'net.fabricmc:fabric-loom:1.18.3'
+        classpath 'me.modmuss50:mod-publish-plugin:2.2.1'
     }
 }
 
@@ -24,6 +24,11 @@ base {
 }
 
 java {
+    /*
+     * Minecraft 1.20.1/Fabric uses Java 17. GravityEngine's loader-neutral
+     * common kernel is also Java 17 bytecode, so this target can consume and
+     * bundle it at the same baseline.
+     */
     toolchain.languageVersion = JavaLanguageVersion.of(17)
 }
 

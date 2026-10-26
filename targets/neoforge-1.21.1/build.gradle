@@ -1,7 +1,7 @@
 plugins {
     id 'java-library'
-    id 'net.neoforged.moddev' version '2.0.141'
-    id 'me.modmuss50.mod-publish-plugin' version '2.1.1'
+    id 'net.neoforged.moddev' version '2.0.148'
+    id 'me.modmuss50.mod-publish-plugin' version '2.2.1'
 }
 
 /*
@@ -15,6 +15,14 @@ plugins {
 apply from: file(
         '../../gradle/target-conventions/properties.gradle'
 )
+
+/*
+ * ModDevGradle's mod model directly references :common's source set below.
+ *
+ * Evaluate the common project first so its Java source sets are available
+ * during configuration of this target.
+ */
+evaluationDependsOn(':common')
 
 /*
  * This target is an independent Gradle root, therefore the shared identity
@@ -42,9 +50,17 @@ java {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 21
+    options.compilerArgs << '-Xmaxerrs' << '2000'
+    options.compilerArgs.add('-Xlint:deprecation')
 }
 
 repositories {
+    mavenCentral()
+    exclusiveContent {
+        forRepository { maven { name = 'Curse release artifacts'; url = 'https://www.cursemaven.com' } }
+        filter { includeGroup 'curse.maven' }
+    }
+
     exclusiveContent {
         forRepository {
             maven {
@@ -58,58 +74,75 @@ repositories {
             includeGroup 'dev.ryanhcode.sable-companion'
         }
     }
-}
-
-/*
- * controlTest is a separate NeoForge development mod.
- */
-sourceSets {
-    controlTest {
-        java.srcDirs = ['src/controlTest/java']
-        resources.srcDirs = ['src/controlTest/resources']
-
-        compileClasspath += sourceSets.main.output
-        compileClasspath += sourceSets.main.compileClasspath
-
-        runtimeClasspath += output
-        runtimeClasspath += sourceSets.main.output
-        runtimeClasspath += sourceSets.main.runtimeClasspath
+    maven {
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
+    maven {
+        url = 'https://maven.latvian.dev/releases'
+        content { includeGroup 'dev.latvian.mods' }
+    }
+    maven {
+        url "https://maven.sighs.cc/repository/maven-public/"
     }
 }
 
-/*
- * The loader-neutral common kernel is distributed as part of the same
- * GravityEngine mod.
- *
- * ModDevGradle should still see only one production source set. Augmenting
- * main.output makes common classes available through MOD_CLASSES in dev runs
- * while avoiding a second source set named "main".
- */
-sourceSets.main.output.dir(
-        project(':common').layout.buildDirectory.dir('classes/java/main'),
-        builtBy: ':common:classes'
-)
-
-configurations {
-    controlTestImplementation.extendsFrom implementation
-    controlTestCompileOnly.extendsFrom compileOnly
-    controlTestRuntimeOnly.extendsFrom runtimeOnly
-    controlTestAnnotationProcessor.extendsFrom annotationProcessor
+// Compile against the exact Ponder ABI embedded in the pinned Create release.
+// No independently upgraded companion is allowed into the runtime profile.
+configurations { createRelease }
+def ponderCompileJar = layout.buildDirectory.file('compat-compile/ponder.jar')
+def extractCreateCompileCompanion = tasks.register('extractCreateCompileCompanion') {
+    inputs.files(configurations.createRelease)
+    outputs.file(ponderCompileJar)
+    doLast {
+        def release = configurations.createRelease.singleFile
+        new java.util.zip.ZipFile(release).withCloseable { zip ->
+            def entry = zip.getEntry('META-INF/jarjar/ponder-neoforge-1.0.82+mc1.21.1.jar')
+            if (entry == null) throw new GradleException('Pinned Create embedded Ponder ABI changed')
+            def output = ponderCompileJar.get().asFile
+            output.parentFile.mkdirs()
+            zip.getInputStream(entry).withCloseable { input -> output.withOutputStream { it << input } }
+        }
+    }
 }
 
-def enableControlTests =
-        providers.gradleProperty('controlBoundaryChecks')
-                .map { it.toBoolean() }
-                .orElse(false)
-
+def compatibilityProfile = providers.gradleProperty('compatibilityProfile').getOrElse('none')
+if (!(compatibilityProfile in ['none', 'sable', 'create', 'aeronautics'])) {
+    throw new GradleException('compatibilityProfile must be none, sable, create or aeronautics')
+}
+/*
+ * GravityEngine consists of two production source sets:
+ *
+ *   - this target's loader-specific main
+ *   - :common's loader-neutral main
+ *
+ * They belong to ONE NeoForge mod.
+ *
+ * This is intentionally expressed through ModDevGradle's mod model instead
+ * of mutating sourceSets.main.output. That keeps Gradle/IDEA source ownership
+ * accurate while still putting both outputs into the same MOD_CLASSES entry.
+ */
 neoForge {
     version = neoforge_version
 
     runs {
-        client {
-            client()
+        // Opt-in game JVM properties, never Gradle daemon JVM arguments.
+        configureEach {
+            def requestedDirectory = providers.gradleProperty('geRunDirectory')
+            if (requestedDirectory.isPresent()) {
+                gameDirectory = layout.projectDirectory.dir(requestedDirectory.get())
+            }
+            [geDebugGravity: 'debugGravity', geDebugMovement: 'debugMovement',
+             geDebugSpatialState: 'debugSpatialState', geDebugView: 'debugView',
+             geDebugViewStacks: 'debugViewStacks', geDebugEntity: 'debugEntity',
+             geDebugSide: 'debugSide'].each { gradleName, systemName ->
+                def configured = providers.gradleProperty(gradleName)
+                if (configured.isPresent()) {
+                    systemProperty "gravityengine.${systemName}", configured.get()
+                }
+            }
         }
-
+        client { client() }
         server {
             server()
             programArgument '--nogui'
@@ -118,29 +151,72 @@ neoForge {
 
     mods {
         "${mod_id}" {
-            /*
-             * main.output already contains:
-             *
-             * - NeoForge target classes/resources
-             * - common classes
-             */
-            sourceSet(sourceSets.main)
-        }
-
-        if (enableControlTests.get()) {
-            "gravityengine_control_tests" {
-                sourceSet(sourceSets.controlTest)
-            }
+            sourceSet sourceSets.main
+            sourceSet project(':common').sourceSets.main
         }
     }
 }
 
 dependencies {
+    createRelease("curse.maven:create-328085:${create_file_id}") { transitive = false }
+    compileOnly("curse.maven:create-328085:${create_file_id}") { transitive = false }
+    compileOnly files(ponderCompileJar).builtBy(extractCreateCompileCompanion)
+    // Optional live runtime for manual/AutoJS sessions, with no embedded test harness.
+    if (compatibilityProfile != 'none') {
+        runtimeOnly("dev.ryanhcode.sable:sable-neoforge-${minecraft_version}:${sable_version}") { transitive = false }
+    }
+    if (compatibilityProfile in ['create', 'aeronautics']) {
+        runtimeOnly("curse.maven:create-328085:${create_file_id}") { transitive = false }
+    }
+    if (compatibilityProfile == 'aeronautics') {
+        def cachedRelease = providers.gradleProperty('aeronauticsReleaseJar').orNull
+        if (cachedRelease != null) {
+            def release = file(cachedRelease)
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            release.withInputStream { input ->
+                byte[] buffer = new byte[65536]
+                int count
+                while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count)
+            }
+            if (digest.digest().encodeHex().toString() != 'a3f330d4757640f8715d991a43eedb826e4d0e51558d859c843ae6693bd35f1e')
+                throw new GradleException('Cached Aeronautics artifact differs from pinned Bundled 1.3.2 release')
+            runtimeOnly files(release)
+        } else {
+            runtimeOnly("curse.maven:create-aeronautics-676721:${aeronautics_file_id}") { transitive = false }
+        }
+    }
+
+    def starminerRuntimeJar =
+            providers.gradleProperty('starminerRuntimeJar').orNull
+
+    if (starminerRuntimeJar != null) {
+        def jarFile = project.file(starminerRuntimeJar)
+
+        if (!jarFile.isFile()) {
+            throw new GradleException(
+                    "StarminerR runtime JAR does not exist: ${jarFile}"
+            )
+        }
+
+        runtimeOnly files(jarFile)
+    }
     /*
-     * Compile dependency and ordinary Gradle project relationship.
+     * Ordinary Java/Gradle dependency relationship.
+     *
+     * This is still required independently of the ModDevGradle mod source-set
+     * declaration above:
+     *
+     *   implementation -> compile/runtime dependency graph
+     *   neoForge.mods   -> FML/ModDevGradle mod folder model
      */
     implementation project(':common')
 
+    /*
+     * Optional Sable integration.
+     *
+     * compileOnly is intentional if Sable is genuinely optional and all
+     * references/mixins are guarded accordingly.
+     */
     compileOnly(
             "dev.ryanhcode.sable:" +
                     "sable-neoforge-${minecraft_version}:" +
@@ -148,12 +224,46 @@ dependencies {
     ) {
         transitive = false
     }
+    // Exact companion API shipped inside the Sable 2.0.6 jar-in-jar.
+    compileOnly 'dev.ryanhcode.sable-companion:sable-companion-common-1.21.1:1.6.0'
+    runtimeOnly 'com.sighs.autojs:AutoJS-neoforge-1.21.1:1.0.0'
+    runtimeOnly 'dev.latvian.mods:rhino:2101.2.7-build.85'
 
 //    compileOnly "curse.maven:sable-1312371:8673825"
 //    implementation "curse.maven:create-328085:7963363"
 //    implementation "curse.maven:create-aeronautics-676721:8763471"
 }
 
+
+/*
+ * The development mod model and the distributable JAR are separate concerns.
+ *
+ * ModDevGradle's sourceSet declarations make common available to development
+ * runs, while this explicitly embeds common bytecode in the final GravityEngine
+ * artifact.
+ *
+ * Only classes are copied here because publish.gradle already contributes:
+ *
+ *   :common/src/main/resources
+ *
+ * to this target's main resources.
+ */
+tasks.named('jar', Jar).configure {
+    dependsOn project(':common').tasks.named('classes')
+    from(file('../../LICENSE'))
+
+    from(
+            project(':common')
+                    .sourceSets
+                    .main
+                    .output
+                    .classesDirs
+    )
+}
+
+/*
+ * Resource metadata expansion.
+ */
 tasks.named(
         'processResources',
         ProcessResources
@@ -163,6 +273,11 @@ tasks.named(
             minecraft_version     : minecraft_version,
             neoforge_version      : neoforge_version,
             neoforge_version_range: neoforge_version_range,
+            sable_version         : sable_version,
+            create_version        : create_version,
+            aeronautics_version   : aeronautics_version,
+            create_version        : create_version,
+            aeronautics_version   : aeronautics_version,
 
             mod_id                : mod_id,
             mod_name              : mod_name,
@@ -185,31 +300,86 @@ tasks.named(
 }
 
 /*
- * Migration/control checkpoint.
+ * Supported-API boundary guard.
  *
- * This proves:
- * - common compiles
- * - production target compiles
- * - controlTest compiles against production
- * - resources process
- * - final jar assembles
- *
- * It does not execute behavioural control tests.
+ * The consumer fixtures under ../../verification/api-consumer/com/example are the
+ * compile-level proof that an external content mod needs only
+ * cc.sighs.gravityengine.api. This task fails the build if any GravityEngine
+ * import in those fixtures reaches outside that namespace.
  */
-tasks.register('baselineSnapshot') {
+tasks.register('verifyApiConsumerImports') {
     group = 'verification'
 
     description =
-            'Compile the imported GravityEngine baseline before refactoring.'
+            'Verify external consumer fixtures import only the supported GravityEngine API.'
 
-    dependsOn tasks.named('classes')
-    dependsOn tasks.named('controlTestClasses')
-    dependsOn tasks.named('jar')
+    def fixtures = fileTree('../../verification/api-consumer/com/example') {
+        include '**/*.java'
+    }
+
+    inputs.files(fixtures)
+
+    doLast {
+        def violations = []
+
+        fixtures.each { File fixture ->
+            def text = fixture.getText('UTF-8')
+            (text =~ /cc\.sighs\.gravityengine\.(?!api\.)[A-Za-z0-9_.]+/).each { match ->
+                violations.add("${fixture.path}: ${match}")
+            }
+        }
+
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    'Consumer fixture imports a non-API GravityEngine package:\n'
+                            + violations.join('\n')
+            )
+        }
+    }
 }
+
+tasks.named('check').configure {
+    dependsOn tasks.named('verifyApiConsumerImports')
+}
+
 
 /*
  * Publishing remains a shared target convention.
+ *
+ * Among other things this contributes:
+ *
+ *   :common/src/main/resources
+ *
+ * to the target's main resource set.
  */
 apply from: file(
         '../../gradle/target-conventions/publish.gradle'
 )
+
+// Independent consumer compilation: only the built GE JAR and platform dependencies.
+// No production/common output directories or optional integration artifacts are visible.
+def artifactJar = tasks.named('jar', Jar).flatMap { it.archiveFile }
+def platformOnly = { File file ->
+    !file.toPath().startsWith(project(':common').layout.buildDirectory.get().asFile.toPath()) &&
+    !file.toPath().startsWith(layout.buildDirectory.get().dir('classes').asFile.toPath()) &&
+    !['sable', 'create', 'ponder', 'aeronautics'].any { file.name.toLowerCase(Locale.ROOT).contains(it) }
+}
+def compileApiArtifact = tasks.register('compileApiArtifact', JavaCompile) {
+    dependsOn tasks.named('jar')
+    source fileTree('../../verification/api-consumer/com/example') { include '**/*.java' }
+    classpath = files(artifactJar) + sourceSets.main.compileClasspath.filter(platformOnly)
+    destinationDirectory = layout.buildDirectory.dir('artifact-consumer/classes')
+    javaCompiler = javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(21) }
+}
+tasks.named('check') { dependsOn compileApiArtifact }
+
+// Publish documentation for supported API declarations, including embedded common.
+tasks.named('javadoc', Javadoc) {
+    dependsOn tasks.named('classes')
+    source = files(fileTree('src/main/java/cc/sighs/gravityengine/api') { include '**/*.java' },
+            project(':common').fileTree('src/main/java/cc/sighs/gravityengine/api') { include '**/*.java' })
+    classpath += sourceSets.main.output
+    options.encoding = 'UTF-8'
+    options.charSet = 'UTF-8'
+    options.docEncoding = 'UTF-8'
+}

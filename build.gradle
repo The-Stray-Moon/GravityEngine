@@ -8,23 +8,24 @@
  * Loader-specific configuration must remain inside targets/.
  */
 
+plugins {
+    id 'jvm-toolchains'
+}
+
 group = providers.gradleProperty('mod_group_id').get()
 version = providers.gradleProperty('mod_version').get()
 
-def targetBuilds = [
-        'forge-1.20.1': [
-                directory: 'targets/forge-1.20.1',
-                task     : 'buildForge1201'
-        ],
-        'fabric-1.20.1': [
-                directory: 'targets/fabric-1.20.1',
-                task     : 'buildFabric1201'
-        ],
-        'neoforge-1.21.1': [
-                directory: 'targets/neoforge-1.21.1',
-                task     : 'buildNeoForge1211'
-        ]
-]
+def targetBuilds = new TreeMap()
+file('targets').listFiles().findAll { it.isDirectory() }.each { directory ->
+    def descriptor = new File(directory, 'ci.properties')
+    if (!descriptor.isFile()) throw new GradleException("Missing target descriptor: ${descriptor}")
+    def metadata = new Properties()
+    descriptor.withInputStream { metadata.load(it) }
+    targetBuilds[directory.name] = [directory: directory, task: metadata.getProperty('aggregate.task', 'build' + directory.name.split('[-.]').collect { it.capitalize() }.join('')),
+            enabled: metadata.getProperty('ci.enabled', 'true').toBoolean(),
+            javaVersion: Integer.parseInt(metadata.getProperty('ci.java')),
+            status: metadata.getProperty('support.status', 'UNVERIFIED')]
+}
 
 def selectedTarget =
         providers.gradleProperty('target').orNull
@@ -56,6 +57,9 @@ project(':common') {
 }
 
 targetBuilds.each { targetName, targetBuild ->
+    def launcher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(targetBuild.javaVersion)
+    }
     tasks.register(targetBuild.task, Exec) {
         group = 'build'
 
@@ -70,15 +74,16 @@ targetBuilds.each { targetName, targetBuild ->
          * Each target owns its loader plugin, Minecraft version and Java
          * toolchain.
          */
-        commandLine(
-                'cmd',
-                '/c',
-                'gradlew.bat',
-                'build',
-                '--console',
-                'plain',
-                '--no-daemon'
-        )
+        doFirst {
+            if (!targetBuild.enabled) throw new GradleException("Target ${targetName} disabled: ${targetBuild.status}")
+            logger.lifecycle("Target ${targetName}: ${targetBuild.status}")
+            // Build plugins can require a newer launcher than production bytecode.
+            // Each independent wrapper uses the same launcher contract as its CI job.
+            environment 'JAVA_HOME', launcher.get().metadata.installationPath.asFile.absolutePath
+        }
+        def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+        commandLine((windows ? ['cmd', '/c', 'gradlew.bat'] : ['bash', './gradlew'])
+                + ['build', '--console', 'plain', '--no-daemon'])
     }
 }
 

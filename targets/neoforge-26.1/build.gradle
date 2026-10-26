@@ -1,7 +1,7 @@
 plugins {
     id 'java-library'
-    id 'net.neoforged.moddev' version '2.0.141'
-    id 'me.modmuss50.mod-publish-plugin' version '2.1.1'
+    id 'net.neoforged.moddev' version '2.0.148'
+    id 'me.modmuss50.mod-publish-plugin' version '2.2.1'
 }
 
 apply from: file('../../gradle/target-conventions/properties.gradle')
@@ -16,6 +16,19 @@ base {
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)
 }
+
+/*
+ * The loader-neutral common kernel is distributed as part of the same
+ * GravityEngine mod.
+ *
+ * Augmenting main.output keeps ModDevGradle on a single production source set
+ * while making the common classes available both in the final jar and through
+ * MOD_CLASSES during development runs.
+ */
+sourceSets.main.output.dir(
+        project(':common').layout.buildDirectory.dir('classes/java/main'),
+        builtBy: ':common:classes'
+)
 
 neoForge {
     version = neoforge_version
@@ -37,8 +50,25 @@ neoForge {
     }
 }
 
+repositories {
+    maven {
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
+    maven {
+        url = 'https://maven.latvian.dev/releases'
+        content { includeGroup 'dev.latvian.mods' }
+    }
+    maven {
+        url "https://maven.sighs.cc/repository/maven-public/"
+    }
+}
+
 dependencies {
     implementation project(':common')
+    runtimeOnly 'com.sighs.autojs:AutoJS-neoforge-26.1:1.0.0'
+    runtimeOnly 'dev.latvian.mods:rhino:2101.2.7-build.82'
+
 }
 
 tasks.named('processResources', ProcessResources).configure {
@@ -59,12 +89,9 @@ tasks.named('processResources', ProcessResources).configure {
     }
 }
 
-tasks.named('jar', Jar).configure {
-    from project(':common').sourceSets.main.output
-}
-
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    options.release = 25
 }
 
 apply from: file('../../gradle/target-conventions/publish.gradle')
