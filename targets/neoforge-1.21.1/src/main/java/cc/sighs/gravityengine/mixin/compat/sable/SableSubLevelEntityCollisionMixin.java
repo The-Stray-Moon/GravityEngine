@@ -1,14 +1,14 @@
 package cc.sighs.gravityengine.mixin.compat.sable;
 
-import cc.sighs.gravityengine.gravity.integration.compat.sable.SablePlayerCollisionCompatibility;
 import cc.sighs.gravityengine.gravity.integration.compat.sable.SableCollisionDiagnostics;
-import com.llamalad7.mixinextras.sugar.Local;
-import it.unimi.dsi.fastutil.objects.ObjectSet;
+import cc.sighs.gravityengine.gravity.integration.compat.sable.SablePlayerCollisionCompatibility;
 import com.llamalad7.mixinextras.expression.Definition;
 import com.llamalad7.mixinextras.expression.Expression;
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.sugar.Local;
+import it.unimi.dsi.fastutil.objects.ObjectSet;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
@@ -17,19 +17,15 @@ import org.joml.Quaterniondc;
 import org.joml.Vector3d;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
-import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Coerce;
-import org.spongepowered.asm.mixin.injection.ModifyArgs;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Slice;
+import org.spongepowered.asm.mixin.injection.*;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 /**
- * Version-matched Sable 2.0.5 character-collision representation bridge.
+ * Version-matched Sable 2.0.6 character-collision representation bridge.
  *
- * <p>Sable remains the SubLevel collision owner. This mixin only adapts the
- * character representation Sable sees while executing its own narrow phase.</p>
+ * <p>The frozen GE exact-body route bypasses Sable's character solve. On a
+ * Sable-owned route, the remaining hooks adapt its character representation.</p>
  */
 @Pseudo
 @Mixin(
@@ -40,6 +36,14 @@ import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
         remap = false
 )
 public abstract class SableSubLevelEntityCollisionMixin {
+    @Inject(method = "collide", at = @At("HEAD"), cancellable = true, require = 1)
+    private static void gravityengine$engineOwnsSublevelCollision(
+            Entity entity, Vec3 motion, Vec3 velocityMotion, @Coerce Object sink,
+            CallbackInfoReturnable<dev.ryanhcode.sable.sublevel.entity_collision.SubLevelEntityCollision.CollisionInfo> cir) {
+        var parentOnly = cc.sighs.gravityengine.gravity.integration.compat.sable.SableCollisionOwnership.parentOnly(entity, motion);
+        if (parentOnly != null) cir.setReturnValue(parentOnly);
+    }
+
 
     /**
      * Disable Sable's no-narrow-phase ServerPlayer shortcut only while a
@@ -257,7 +261,7 @@ public abstract class SableSubLevelEntityCollisionMixin {
      * Replace the returned value only inside this collision method with
      * GravityEngine's gravity-feet definition.
      *
-     * Sable 2.0.5 currently has exactly two calls in collide(): operation
+     * Sable 2.0.6 has exactly two calls in collide(): operation
      * start and inheritedMotion calculation.
      */
     @ModifyExpressionValue(

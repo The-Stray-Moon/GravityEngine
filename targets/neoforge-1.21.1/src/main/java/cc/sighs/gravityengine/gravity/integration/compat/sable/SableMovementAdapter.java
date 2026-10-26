@@ -1,14 +1,16 @@
 package cc.sighs.gravityengine.gravity.integration.compat.sable;
 
+import cc.sighs.gravityengine.api.math.Vec3d;
 import cc.sighs.gravityengine.gravity.debug.GravityDebugLog;
 import cc.sighs.gravityengine.gravity.minecraft.access.GravityEntityAccess;
+import cc.sighs.gravityengine.gravity.minecraft.math.MinecraftMathAdapter;
 import cc.sighs.gravityengine.gravity.policy.GravityInfluencePolicy;
 import cc.sighs.gravityengine.gravity.runtime.ExternalSubLevelMoveEvidence;
 import cc.sighs.gravityengine.gravity.runtime.ExternalSubLevelSupportEvidence;
 import cc.sighs.gravityengine.gravity.runtime.SubLevelMovementPolicy;
 import dev.ryanhcode.sable.mixinterface.entity.entity_sublevel_collision.EntityMovementExtension;
-import dev.ryanhcode.sable.sublevel.entity_collision.SubLevelEntityCollision;
 import dev.ryanhcode.sable.sublevel.SubLevel;
+import dev.ryanhcode.sable.sublevel.entity_collision.SubLevelEntityCollision;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
@@ -21,7 +23,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Exact Sable 2.0.5 movement adapter. Loaded only through
+ * Exact Sable 2.0.6 movement adapter. Loaded only through
  * {@link SableMovementCompatibility}.
  */
 final class SableMovementAdapter {
@@ -38,6 +40,7 @@ final class SableMovementAdapter {
         }
         SubLevelEntityCollision.CollisionInfo info =
                 extension.sable$getCollisionInfo();
+        if (info instanceof SableCollisionOwnership.EngineCollisionInfo) return null;
         if (info == null
                 || info.motion == null
                 || !info.motion.equals(parentSolverMovement)) {
@@ -79,8 +82,7 @@ final class SableMovementAdapter {
                         info
                 );
 
-        GravityDebugLog.log(
-                entity,
+        if (GravityDebugLog.shouldLog(entity)) GravityDebugLog.log(entity,
                 "sable-sublevel-evidence",
                 "collisionInfoId=%08x customBody=%s "
                         + "serverPlayerTrackingFastPathInferred=%s "
@@ -151,36 +153,27 @@ final class SableMovementAdapter {
             return Optional.empty();
         }
 
-        Vector3d normalJoml =
-                new Vector3d(
-                        contact.globalDirection()
-                );
-
-        if (!normalJoml.isFinite()
-                || !(normalJoml.lengthSquared()
-                > 1.0E-24D)) {
+        Vector3dc rawNormal = contact.globalDirection();
+        Vec3d normal = new Vec3d(
+                rawNormal.x(),
+                rawNormal.y(),
+                rawNormal.z()
+        );
+        if (!normal.isFinite()
+                || !(normal.lengthSquared() > 1.0E-24D)) {
             return Optional.empty();
         }
-
-        normalJoml.normalize();
+        normal = normal.normalized();
 
         var runtime =
                 GravityEntityAccess.cast(entity)
-                        .gravityengine$gravityComponent().runtime();
+                        .gravityengine$gravityComponent().operationState();
 
         if (!runtime.isInMove()) {
             return Optional.empty();
         }
 
-        Vec3 up =
-                runtime.activeFrame().up();
-
-        Vec3 normal =
-                new Vec3(
-                        normalJoml.x,
-                        normalJoml.y,
-                        normalJoml.z
-                );
+        Vec3d up = runtime.activeFrame().up();
 
         /*
          * Sable classified this as vertical relative to the collision
@@ -204,27 +197,29 @@ final class SableMovementAdapter {
                         contact.localLocation()
                 );
 
-        Vector3d velocity =
-                subLevelSurfaceVelocity(
-                        entity.level(),
-                        info.trackingSubLevel,
-                        contact.localLocation()
-                );
-
         /*
          * Sable getVelocity is blocks/second in this path.
          * GravityEngine translational velocities are blocks/tick.
          */
-        velocity.mul(1.0D / 20.0D);
+        Vector3d velocity = subLevelSurfaceVelocity(
+                entity.level(),
+                info.trackingSubLevel,
+                contact.localLocation()
+        );
+        Vec3d velocityTicks = new Vec3d(
+                velocity.x,
+                velocity.y,
+                velocity.z
+        ).multiply(1.0D / 20.0D);
 
         return Optional.of(
                 new ExternalSubLevelSupportEvidence(
                         subLevelId.get(),
-                        normal,
+                        MinecraftMathAdapter.toMinecraft(normal),
                         new Vec3(
-                                velocity.x,
-                                velocity.y,
-                                velocity.z
+                                velocityTicks.x(),
+                                velocityTicks.y(),
+                                velocityTicks.z()
                         ),
                         new Vec3(
                                 worldPoint.x,
@@ -264,7 +259,7 @@ final class SableMovementAdapter {
                     .invoke(pose, new Vector3d(local));
         } catch (ReflectiveOperationException failure) {
             throw new IllegalStateException(
-                    "Sable 2.0.5 SubLevel.logicalPose/"
+                    "Sable 2.0.6 SubLevel.logicalPose/"
                             + "Pose3dc.transformPosition contract changed",
                     failure
             );
@@ -276,7 +271,7 @@ final class SableMovementAdapter {
      *
      * <p>{@code Sable.HELPER.getVelocity(...)} cannot be referenced directly:
      * its declaring type implements the nested companion interface, which is
-     * not a Gradle compile dependency. The version-matched 2.0.5 overload is
+     * not a Gradle compile dependency. The version-matched 2.0.6 overload is
      * resolved by shape at the call site and no helper or handle is
      * retained.</p>
      */

@@ -11,7 +11,7 @@ public final class SableCollisionDiagnostics {
     public static void logReturn(
             Entity entity, Object result, String exitReason, int candidateCount
     ) {
-        if (!GravityDebugLog.ENABLED
+        if (!GravityDebugLog.shouldLog(entity)
                 || !(result instanceof SubLevelEntityCollision.CollisionInfo info)) {
             return;
         }
