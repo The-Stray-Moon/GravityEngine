@@ -1,0 +1,109 @@
+/*
+ * GravityEngine aggregate build.
+ *
+ * Responsibilities:
+ * - repository-level identity for the aggregate/common build
+ * - orchestrate independent loader/version targets
+ *
+ * Loader-specific configuration must remain inside targets/.
+ */
+
+plugins {
+    id 'jvm-toolchains'
+}
+
+group = providers.gradleProperty('mod_group_id').get()
+version = providers.gradleProperty('mod_version').get()
+
+def targetBuilds = new TreeMap()
+file('targets').listFiles().findAll { it.isDirectory() }.each { directory ->
+    def descriptor = new File(directory, 'ci.properties')
+    if (!descriptor.isFile()) throw new GradleException("Missing target descriptor: ${descriptor}")
+    def metadata = new Properties()
+    descriptor.withInputStream { metadata.load(it) }
+    targetBuilds[directory.name] = [directory: directory, task: metadata.getProperty('aggregate.task', 'build' + directory.name.split('[-.]').collect { it.capitalize() }.join('')),
+            enabled: metadata.getProperty('ci.enabled', 'true').toBoolean(),
+            javaVersion: Integer.parseInt(metadata.getProperty('ci.java')),
+            status: metadata.getProperty('support.status', 'UNVERIFIED')]
+}
+
+def selectedTarget =
+        providers.gradleProperty('target').orNull
+
+def buildAllTargets =
+        providers.gradleProperty('allTargets')
+                .map { it.toBoolean() }
+                .orElse(false)
+
+if (selectedTarget != null
+        && !targetBuilds.containsKey(selectedTarget)) {
+
+    throw new GradleException(
+            "Unknown target '${selectedTarget}'. " +
+                    "Available targets: " +
+                    targetBuilds.keySet().join(', ')
+    )
+}
+
+/*
+ * common belongs to this aggregate build when invoked from repository root.
+ *
+ * Individual targets include the exact same ../../common directory in their
+ * own Gradle build, so common must remain self-contained.
+ */
+project(':common') {
+    group = rootProject.group
+    version = rootProject.version
+}
+
+targetBuilds.each { targetName, targetBuild ->
+    def launcher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(targetBuild.javaVersion)
+    }
+    tasks.register(targetBuild.task, Exec) {
+        group = 'build'
+
+        description =
+                "Builds ${targetName} in its independent Gradle project."
+
+        workingDir file(targetBuild.directory)
+
+        /*
+         * Keep target builds isolated from the aggregate Gradle model.
+         *
+         * Each target owns its loader plugin, Minecraft version and Java
+         * toolchain.
+         */
+        doFirst {
+            if (!targetBuild.enabled) throw new GradleException("Target ${targetName} disabled: ${targetBuild.status}")
+            logger.lifecycle("Target ${targetName}: ${targetBuild.status}")
+            // Build plugins can require a newer launcher than production bytecode.
+            // Each independent wrapper uses the same launcher contract as its CI job.
+            environment 'JAVA_HOME', launcher.get().metadata.installationPath.asFile.absolutePath
+        }
+        def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+        commandLine((windows ? ['cmd', '/c', 'gradlew.bat'] : ['bash', './gradlew'])
+                + ['build', '--console', 'plain', '--no-daemon'])
+    }
+}
+
+tasks.register('build') {
+    group = 'build'
+
+    description =
+            'Builds common and optionally one or all platform targets.'
+
+    dependsOn ':common:build'
+
+    if (selectedTarget != null) {
+        dependsOn tasks.named(
+                targetBuilds[selectedTarget].task
+        )
+    }
+
+    if (buildAllTargets.get()) {
+        targetBuilds.values().each { targetBuild ->
+            dependsOn tasks.named(targetBuild.task)
+        }
+    }
+}

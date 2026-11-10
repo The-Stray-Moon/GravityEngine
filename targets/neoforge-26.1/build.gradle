@@ -1,0 +1,97 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+    id 'me.modmuss50.mod-publish-plugin' version '2.2.1'
+}
+
+apply from: file('../../gradle/target-conventions/properties.gradle')
+
+group = mod_group_id
+version = mod_version
+
+base {
+    archivesName = "${mod_name}-neoforge-26.1"
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+}
+
+/*
+ * The loader-neutral common kernel is distributed as part of the same
+ * GravityEngine mod.
+ *
+ * Augmenting main.output keeps ModDevGradle on a single production source set
+ * while making the common classes available both in the final jar and through
+ * MOD_CLASSES during development runs.
+ */
+sourceSets.main.output.dir(
+        project(':common').layout.buildDirectory.dir('classes/java/main'),
+        builtBy: ':common:classes'
+)
+
+neoForge {
+    version = neoforge_version
+
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+            programArgument '--nogui'
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+repositories {
+    maven {
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
+    maven {
+        url = 'https://maven.latvian.dev/releases'
+        content { includeGroup 'dev.latvian.mods' }
+    }
+    maven {
+        url "https://maven.sighs.cc/repository/maven-public/"
+    }
+}
+
+dependencies {
+    implementation project(':common')
+    runtimeOnly 'com.sighs.autojs:AutoJS-neoforge-26.1:1.0.0'
+    runtimeOnly 'dev.latvian.mods:rhino:2101.2.7-build.82'
+
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    def replaceProperties = [
+            minecraft_version: minecraft_version,
+            neoforge_version: neoforge_version,
+            neoforge_version_range: neoforge_version_range,
+            mod_id: mod_id,
+            mod_name: mod_name,
+            mod_license: mod_license,
+            mod_version: mod_version,
+            mod_authors: mod_authors,
+            mod_description: mod_description
+    ]
+    inputs.properties replaceProperties
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand replaceProperties + [project: project]
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 25
+}
+
+apply from: file('../../gradle/target-conventions/publish.gradle')

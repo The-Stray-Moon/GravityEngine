@@ -1,0 +1,36 @@
+def targetRoot = rootProject.projectDir
+
+def repositoryRoot = targetRoot.toPath()
+        .resolve('../..')
+        .normalize()
+        .toFile()
+
+def sharedPropertiesFile =
+        new File(repositoryRoot, 'gradle.properties')
+
+if (!sharedPropertiesFile.isFile()) {
+    throw new GradleException(
+            "Shared gradle.properties not found: ${sharedPropertiesFile}"
+    )
+}
+
+def sharedProperties = new Properties()
+
+sharedPropertiesFile.withInputStream {
+    sharedProperties.load(it)
+}
+
+sharedProperties.each { key, value ->
+    def name = key.toString()
+
+    /*
+     * Respect values already supplied through:
+     * - -P
+     * - environment/system project properties
+     * - user gradle.properties
+     * - target-local gradle.properties
+     */
+    if (!project.hasProperty(name)) {
+        project.ext.set(name, value.toString())
+    }
+}
